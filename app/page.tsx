@@ -19,6 +19,7 @@ import {
   SelectItem,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import { Input } from '@/components/ui/input';
 import {
   ROOTS,
   QUALITIES,
@@ -30,7 +31,7 @@ import {
   synthesize,
   SOUND_VERSION,
   takeLength,
-  scheduleTake,
+  trimAudio,
   renderTake,
   encodeWav,
   type Hit,
@@ -100,8 +101,17 @@ export default function Home() {
     [hits, setHits] = useState<Hit[]>([]),
     [length, setLength] = useState(0),
     [clock, setClock] = useState(0),
+    [trim, setTrim] = useState<[number, number]>([0, 0]),
+    [trimDraft, setTrimDraft] = useState<[string, string]>(['0.000', '0.000']),
     [status, setStatus] = useState('Ready when you are'),
     [exporting, setExporting] = useState(false);
+  const takeCache = useRef<{
+    hits: Hit[];
+    length: number;
+    rate: number;
+    pcm: Float32Array;
+  } | null>(null);
+  const playbackRange = useRef({ offset: 0, duration: 0 });
   const buffers = useRef(new Map<string, AudioBuffer>());
   const audio = useRef<AudioContext | null>(null),
     sources = useRef(new Set<AudioBufferSourceNode>()),
@@ -205,6 +215,7 @@ export default function Home() {
       );
       const total = takeLength(recorded.current, elapsed);
       setLength(total);
+      updateTrim(0, total);
       setClock(total);
       setStatus(
         recorded.current.length
@@ -227,6 +238,8 @@ export default function Home() {
       recorded.current = [];
       setHits([]);
       setLength(0);
+      updateTrim(0, 0);
+      takeCache.current = null;
       setClock(0);
       start.current = ctx.currentTime + 0.012;
       recording.current = true;
@@ -237,21 +250,61 @@ export default function Home() {
       setStatus('Audio unavailable. Try again.');
     }
   }
+  const isTrimmed = trim[0] > 0 || trim[1] < length;
+  useEffect(() => {
+    if (length > 0 && trim[1] === 0) updateTrim(0, length);
+  }, [length, trim]);
+  function updateTrim(from: number, to: number) {
+    setTrim([from, to]);
+    setTrimDraft([from.toFixed(3), to.toFixed(3)]);
+  }
+  function commitTrim(index: 0 | 1) {
+    const value = Number(trimDraft[index]);
+    if (!trimDraft[index].trim() || !Number.isFinite(value)) {
+      setTrimDraft([trim[0].toFixed(3), trim[1].toFixed(3)]);
+      return;
+    }
+    const from =
+      index === 0 ? Math.max(0, Math.min(value, trim[1] - 0.001)) : trim[0];
+    const to =
+      index === 1
+        ? Math.min(length, Math.max(value, trim[0] + 0.001))
+        : trim[1];
+    updateTrim(from, to);
+    setClock(0);
+    setStatus('Selection updated · original take kept');
+  }
+  function selectionAudio(rate: number) {
+    let cached = takeCache.current;
+    if (
+      !cached ||
+      cached.hits !== hits ||
+      cached.rate !== rate ||
+      cached.length !== length
+    ) {
+      cached = { hits, rate, length, pcm: renderTake(hits, length, rate) };
+      takeCache.current = cached;
+    }
+    return trimAudio(cached.pcm, rate, trim[0], trim[1]);
+  }
   async function replay() {
     try {
       const ctx = await unlock();
       silence();
-      start.current = scheduleTake(
-        hits,
-        (h) => prepareHit(ctx, h),
-        () => ctx.currentTime,
-        (buffer, time) => playBuffer(ctx, buffer, time),
-      );
-      endTime.current = start.current + length;
+      const pcm = selectionAudio(ctx.sampleRate);
+      const buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
+      buffer.getChannelData(0).set(pcm);
+      // Prepare the selected audio before starting the playback clock.
+      start.current = ctx.currentTime + 0.06;
+      playbackRange.current = { offset: trim[0], duration: buffer.duration };
+      endTime.current = start.current + buffer.duration;
+      playBuffer(ctx, buffer, start.current);
       setClock(0);
       modeRef.current = 'playing';
       setMode('playing');
-      setStatus('Playing your take');
+      setStatus(
+        isTrimmed ? 'Playing selected range' : 'Playing your full take',
+      );
     } catch {
       silence();
       setStatus('Playback could not start.');
@@ -263,14 +316,18 @@ export default function Home() {
     try {
       await new Promise((r) => setTimeout(r, 30));
       const rate = audio.current?.sampleRate ?? 44100;
-      const wav = encodeWav(renderTake(hits, length, rate), rate);
+      const wav = encodeWav(selectionAudio(rate), rate);
       const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
       const a = document.createElement('a');
       a.href = url;
       a.download = `carryon-${new Date().toISOString().replace(/[:.]/g, '-')}.wav`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10000);
-      setStatus('WAV downloaded');
+      setStatus(
+        isTrimmed
+          ? 'Selected range downloaded · original take kept'
+          : 'Full take downloaded',
+      );
     } catch {
       setStatus('Could not export this take. Try a shorter recording.');
     } finally {
@@ -324,13 +381,17 @@ export default function Home() {
       if (mode === 'playing') {
         setActive(
           hits
-            .filter((h) => t >= h.time && t < h.time + 0.18)
+            .filter(
+              (h) =>
+                t + playbackRange.current.offset >= h.time &&
+                t + playbackRange.current.offset < h.time + h.duration,
+            )
             .map((h) => h.pad),
         );
         if (ctx.currentTime >= endTime.current) {
           setMode('idle');
           modeRef.current = 'idle';
-          setClock(length);
+          setClock(playbackRange.current.duration);
           setStatus('Playback complete');
           setActive([]);
         }
@@ -411,7 +472,7 @@ export default function Home() {
     }
     return () => lifecycle.abort();
   }, []);
-  const scale = Math.max(8, mode === 'recording' ? clock + 2 : length),
+  const scale = mode === 'recording' ? Math.max(8, clock + 2) : length || 8,
     chosen = pads[selected];
   return (
     <main>
@@ -639,14 +700,107 @@ export default function Home() {
                   </div>
                 ))
               )}
+              {hits.length > 0 && mode !== 'recording' && (
+                <>
+                  <div
+                    className="trim-shade"
+                    style={{ left: 0, width: `${(trim[0] / scale) * 100}%` }}
+                  />
+                  <div
+                    className="trim-shade"
+                    style={{ left: `${(trim[1] / scale) * 100}%`, right: 0 }}
+                  />
+                  <div
+                    className="trim-edge"
+                    style={{ left: `${(trim[0] / scale) * 100}%` }}
+                  />
+                  <div
+                    className="trim-edge"
+                    style={{ left: `${(trim[1] / scale) * 100}%` }}
+                  />
+                </>
+              )}
               {mode !== 'idle' && (
                 <div
                   className="playhead"
-                  style={{ left: `${Math.min(100, (clock / scale) * 100)}%` }}
+                  style={{
+                    left: `${Math.min(100, ((clock + (mode === 'playing' ? playbackRange.current.offset : 0)) / scale) * 100)}%`,
+                  }}
                 />
               )}
             </div>
           </div>
+          {hits.length > 0 && mode !== 'recording' && (
+            <section className="trim-panel" aria-label="Trim recording">
+              <div className="trim-heading">
+                <h3>Trim your take</h3>
+                <span>
+                  <b>{(trim[1] - trim[0]).toFixed(3)} s</b> selected /{' '}
+                  {length.toFixed(3)} s original
+                </span>
+              </div>
+              <Slider
+                className="trim-slider"
+                aria-label="Selected audio range"
+                min={0}
+                max={length}
+                step={0.001}
+                minStepsBetweenValues={1}
+                value={trim}
+                disabled={mode !== 'idle' || exporting}
+                onValueChange={(value) => {
+                  if (Array.isArray(value)) {
+                    updateTrim(value[0], value[1]);
+                    setClock(0);
+                    setStatus('Selection updated · original take kept');
+                  }
+                }}
+              />
+              <div className="trim-fields">
+                {([0, 1] as const).map((index) => (
+                  <label key={index} htmlFor={`trim-${index}`}>
+                    {index === 0 ? 'Start (seconds)' : 'End (seconds)'}
+                    <Input
+                      id={`trim-${index}`}
+                      type="number"
+                      inputMode="decimal"
+                      step="0.001"
+                      min={index === 0 ? 0 : trim[0] + 0.001}
+                      max={index === 0 ? trim[1] - 0.001 : length}
+                      value={trimDraft[index]}
+                      disabled={mode !== 'idle' || exporting}
+                      onChange={(event) =>
+                        setTrimDraft((draft) =>
+                          index === 0
+                            ? [event.target.value, draft[1]]
+                            : [draft[0], event.target.value],
+                        )
+                      }
+                      onBlur={() => commitTrim(index)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') event.currentTarget.blur();
+                      }}
+                    />
+                  </label>
+                ))}
+                <button
+                  className="reset-trim"
+                  disabled={!isTrimmed || mode !== 'idle' || exporting}
+                  onClick={() => {
+                    updateTrim(0, length);
+                    setClock(0);
+                    setStatus('Full take restored');
+                  }}
+                >
+                  Reset to full take
+                </button>
+              </div>
+              <p>
+                Drag either handle or enter exact times. Replay and download use
+                this range. Your original stays intact.
+              </p>
+            </section>
+          )}
           <div className="transport">
             <div className="transport-buttons">
               <button
@@ -675,7 +829,11 @@ export default function Home() {
               onClick={download}
             >
               <Download size={17} />
-              {exporting ? 'Preparing…' : 'Download WAV'}
+              {exporting
+                ? 'Preparing…'
+                : isTrimmed
+                  ? 'Download trimmed WAV'
+                  : 'Download WAV'}
             </button>
           </div>
           <div className="take-meta">

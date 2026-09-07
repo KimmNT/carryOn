@@ -250,3 +250,30 @@ export function renderTake(hits: Hit[], length: number, rate: number) {
   }
   return result;
 }
+
+/** Cut PCM, not trigger events: a chord that started earlier keeps ringing. */
+export function trimAudio(
+  samples: Float32Array,
+  rate: number,
+  start: number,
+  end: number,
+) {
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start < 0 ||
+    end <= start ||
+    end > samples.length / rate + 1e-9
+  )
+    throw new RangeError(
+      'Choose a start before the end, within the original take.',
+    );
+  const first = Math.round(start * rate);
+  const last =
+    Math.ceil(end * rate) >= samples.length
+      ? samples.length
+      : Math.round(end * rate);
+  if (last <= first)
+    throw new RangeError('The selection must contain audio samples.');
+  return samples.slice(first, last);
+}
