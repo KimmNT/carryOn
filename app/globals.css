@@ -956,3 +956,43 @@ footer > span:first-child {
     flex-basis: 100%;
   }
 }
+
+.layer-panel {
+  padding: 16px;
+  margin-bottom: 18px;
+  border: 1px solid #34383a;
+  border-radius: 12px;
+}
+.layer-tabs,
+.layer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.layer-panel button {
+  padding: 9px 13px;
+  border: 1px solid #41484b;
+  border-radius: 8px;
+  background: #24292c;
+  color: #eee;
+  cursor: pointer;
+}
+.layer-panel button[aria-pressed='true'] {
+  border-color: #b9fa73;
+  color: #b9fa73;
+}
+.layer-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.layer-panel p,
+.layer-panel label {
+  font-size: 13px;
+  color: #adb8bd;
+}
+.layer-panel small {
+  margin-left: 8px;
+}
+.layer-actions {
+  margin-top: 12px;
+}

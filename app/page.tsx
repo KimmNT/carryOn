@@ -47,6 +47,23 @@ import {
   type Instrument,
 } from '@/lib/instrument';
 
+import { mixTracks } from '@/lib/instrument';
+type Track = {
+  name: string;
+  instrument: Instrument;
+  hits: Hit[];
+  length: number;
+  trim: [number, number];
+  undo: { index: number; hit: Hit }[];
+};
+const emptyTrack = (name: string, instrument: Instrument): Track => ({
+  name,
+  instrument,
+  hits: [],
+  length: 0,
+  trim: [0, 0],
+  undo: [],
+});
 const COLORS = [
   '#b9fa73',
   '#7ed6ff',
@@ -207,6 +224,40 @@ export default function Home() {
     [trimDraft, setTrimDraft] = useState<[string, string]>(['0.000', '0.000']),
     [status, setStatus] = useState('Ready when you are'),
     [exporting, setExporting] = useState(false);
+  const [tracks, setTracks] = useState<Track[]>([
+    emptyTrack('Track 1', 'piano'),
+  ]);
+  const [trackIndex, setTrackIndex] = useState(0);
+  const [monitor, setMonitor] = useState(true);
+  const currentTracks = tracks.map((track, i) =>
+    i === trackIndex
+      ? { ...track, instrument, hits, length, trim, undo: undoEdits }
+      : track,
+  );
+  const hasMix = currentTracks.some((t) => t.hits.length > 0);
+  function switchTrack(index: number, adding = false) {
+    if (modeRef.current !== 'idle' || exporting) return;
+    silence();
+    const next = adding
+      ? [
+          ...currentTracks,
+          emptyTrack('Track ' + (tracks.length + 1), instrument),
+        ]
+      : currentTracks;
+    const track = next[index];
+    setTracks(next);
+    setTrackIndex(index);
+    setInstrument(track.instrument);
+    setHits(track.hits);
+    recorded.current = track.hits;
+    setLength(track.length);
+    updateTrim(...track.trim);
+    setUndoEdits(track.undo);
+    setEditHit(null);
+    setClock(0);
+    takeCache.current = null;
+    setStatus(track.name + ' selected');
+  }
   const takeCache = useRef<{
     hits: Hit[];
     length: number;
@@ -328,6 +379,7 @@ export default function Home() {
       setLength(total);
       updateTrim(0, total);
       setClock(total);
+      silence();
       setStatus(
         recorded.current.length
           ? 'Take ready · chord tails preserved'
@@ -346,6 +398,17 @@ export default function Home() {
     try {
       const ctx = await unlock();
       silence();
+      const backing = monitor
+        ? mixTracks(
+            currentTracks.filter((_, i) => i !== trackIndex),
+            ctx.sampleRate,
+          )
+        : new Float32Array(0);
+      let backingBuffer: AudioBuffer | null = null;
+      if (backing.length) {
+        backingBuffer = ctx.createBuffer(1, backing.length, ctx.sampleRate);
+        backingBuffer.getChannelData(0).set(backing);
+      }
       recorded.current = [];
       setHits([]);
       setEditHit(null);
@@ -354,7 +417,8 @@ export default function Home() {
       updateTrim(0, 0);
       takeCache.current = null;
       setClock(0);
-      start.current = ctx.currentTime + 0.012;
+      start.current = ctx.currentTime + 0.06;
+      if (backingBuffer) playBuffer(ctx, backingBuffer, start.current);
       recording.current = true;
       modeRef.current = 'recording';
       setMode('recording');
@@ -400,17 +464,19 @@ export default function Home() {
     }
     return trimAudio(cached.pcm, rate, trim[0], trim[1]);
   }
-  async function replay(loop = false) {
+  async function replay(loop = false, all = false) {
     try {
       const ctx = await unlock();
       silence();
-      const pcm = selectionAudio(ctx.sampleRate);
+      const pcm = all
+        ? mixTracks(currentTracks, ctx.sampleRate)
+        : selectionAudio(ctx.sampleRate);
       const buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
       buffer.getChannelData(0).set(pcm);
       // Prepare the selected audio before starting the playback clock.
       start.current = ctx.currentTime + 0.06;
       playbackRange.current = {
-        offset: trim[0],
+        offset: all ? 0 : trim[0],
         duration: buffer.duration,
         loop,
       };
@@ -420,11 +486,15 @@ export default function Home() {
       modeRef.current = 'playing';
       setMode('playing');
       setStatus(
-        loop
-          ? 'Looping selected range · press Stop to finish'
-          : isTrimmed
-            ? 'Playing selected range once'
-            : 'Playing your full take once',
+        all
+          ? loop
+            ? 'Looping all tracks'
+            : 'Playing all tracks'
+          : loop
+            ? 'Looping selected range · press Stop to finish'
+            : isTrimmed
+              ? 'Playing selected range once'
+              : 'Playing your full take once',
       );
     } catch {
       silence();
@@ -465,13 +535,16 @@ export default function Home() {
     setReplacement(recordedChord(last.hit));
     setStatus(`Edit undone · ${last.hit.label} restored`);
   }
-  async function download() {
+  async function download(all = false) {
     setExporting(true);
     setStatus('Preparing WAV…');
     try {
       await new Promise((r) => setTimeout(r, 30));
       const rate = audio.current?.sampleRate ?? 44100;
-      const wav = encodeWav(selectionAudio(rate), rate);
+      const wav = encodeWav(
+        all ? mixTracks(currentTracks, rate) : selectionAudio(rate),
+        rate,
+      );
       const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
       const a = document.createElement('a');
       a.href = url;
@@ -479,9 +552,11 @@ export default function Home() {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10000);
       setStatus(
-        isTrimmed
-          ? 'Selected range downloaded · original take kept'
-          : 'Full take downloaded',
+        all
+          ? 'All tracks downloaded as a mix'
+          : isTrimmed
+            ? 'Selected range downloaded · original take kept'
+            : 'Full take downloaded',
       );
     } catch {
       setStatus('Could not export this take. Try a shorter recording.');
@@ -813,6 +888,64 @@ export default function Home() {
               {fmt(clock)}
             </div>
           </div>
+          <section className="layer-panel" aria-label="Recording tracks">
+            <div className="layer-tabs">
+              {currentTracks.map((track, i) => (
+                <button
+                  key={i}
+                  aria-pressed={i === trackIndex}
+                  disabled={mode !== 'idle' || exporting}
+                  onClick={() => switchTrack(i)}
+                >
+                  {track.name} · {track.instrument}{' '}
+                  <small>
+                    {track.hits.length
+                      ? (track.trim[1] - track.trim[0]).toFixed(1) + ' s'
+                      : 'Empty'}
+                  </small>
+                </button>
+              ))}
+              <button
+                disabled={mode !== 'idle' || exporting}
+                onClick={() => switchTrack(tracks.length, true)}
+              >
+                + Add track
+              </button>
+            </div>
+            <p>
+              Recording, trimming and chord edits affect the selected track.
+              Trimmed tracks start together from zero.
+            </p>
+            <label>
+              <input
+                type="checkbox"
+                checked={monitor}
+                onChange={(e) => setMonitor(e.target.checked)}
+                disabled={mode !== 'idle' || exporting}
+              />{' '}
+              Hear other tracks while recording
+            </label>
+            <div className="layer-actions">
+              <button
+                disabled={!hasMix || mode !== 'idle' || exporting}
+                onClick={() => replay(false, true)}
+              >
+                Play all tracks
+              </button>
+              <button
+                disabled={!hasMix || mode !== 'idle' || exporting}
+                onClick={() => replay(true, true)}
+              >
+                Loop all tracks
+              </button>
+              <button
+                disabled={!hasMix || mode !== 'idle' || exporting}
+                onClick={() => download(true)}
+              >
+                Download mix
+              </button>
+            </div>
+          </section>
           <div className="timeline">
             <div className="ruler">
               {Array.from({ length: 5 }, (_, i) => (
@@ -1031,7 +1164,7 @@ export default function Home() {
                 onClick={record}
               >
                 <Circle size={15} fill="currentColor" />
-                {hits.length ? 'Record new take' : 'Record'}
+                {hits.length ? 'Re-record this track' : 'Record this track'}
               </button>
               <button disabled={mode === 'idle'} onClick={stop}>
                 <Square size={15} fill="currentColor" />
@@ -1042,7 +1175,7 @@ export default function Home() {
                 onClick={() => replay(false)}
               >
                 <Play size={15} fill="currentColor" />
-                Replay
+                Replay this track
               </button>
               <button
                 disabled={!hits.length || mode !== 'idle' || exporting}
@@ -1056,7 +1189,7 @@ export default function Home() {
             <button
               className="download"
               disabled={!hits.length || mode !== 'idle' || exporting}
-              onClick={download}
+              onClick={() => download()}
             >
               <Download size={17} />
               {exporting
