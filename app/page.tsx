@@ -11,6 +11,7 @@ import {
   Keyboard,
   AudioLines,
   Check,
+  Undo2,
 } from 'lucide-react';
 import {
   Select,
@@ -28,6 +29,8 @@ import {
   chordLabel,
   chordNotes,
   chordNoteNames,
+  recordedChord,
+  replaceRecordedChord,
   createKeyGate,
   synthesize,
   SOUND_VERSION,
@@ -101,6 +104,12 @@ export default function Home() {
     [active, setActive] = useState<number[]>([]),
     [mode, setMode] = useState<'idle' | 'recording' | 'playing'>('idle'),
     [hits, setHits] = useState<Hit[]>([]),
+    [editHit, setEditHit] = useState<number | null>(null),
+    [replacement, setReplacement] = useState<Pad>({
+      root: 0,
+      quality: 'major',
+    }),
+    [undoEdits, setUndoEdits] = useState<{ index: number; hit: Hit }[]>([]),
     [length, setLength] = useState(0),
     [clock, setClock] = useState(0),
     [trim, setTrim] = useState<[number, number]>([0, 0]),
@@ -247,6 +256,8 @@ export default function Home() {
       silence();
       recorded.current = [];
       setHits([]);
+      setEditHit(null);
+      setUndoEdits([]);
       setLength(0);
       updateTrim(0, 0);
       takeCache.current = null;
@@ -327,6 +338,40 @@ export default function Home() {
       silence();
       setStatus('Playback could not start.');
     }
+  }
+  function selectRecordedHit(index: number) {
+    if (modeRef.current !== 'idle' || exporting || !hits[index]) return;
+    setEditHit(index);
+    setReplacement(recordedChord(hits[index]));
+  }
+  function applyRecordedEdit() {
+    if (modeRef.current !== 'idle' || exporting || editHit === null) return;
+    const previous = hits[editHit];
+    const next = replaceRecordedChord(hits, editHit, replacement);
+    if (previous.label === next[editHit].label) return;
+    silence();
+    setUndoEdits((history) => [...history, { index: editHit, hit: previous }]);
+    recorded.current = next;
+    setHits(next);
+    takeCache.current = null;
+    setStatus(
+      `${previous.label} replaced with ${next[editHit].label} at ${previous.time.toFixed(3)} s · timing kept`,
+    );
+  }
+  function undoRecordedEdit() {
+    if (modeRef.current !== 'idle' || exporting || !undoEdits.length) return;
+    const last = undoEdits[undoEdits.length - 1];
+    const next = hits.map((hit, index) =>
+      index === last.index ? last.hit : hit,
+    );
+    silence();
+    recorded.current = next;
+    setHits(next);
+    takeCache.current = null;
+    setUndoEdits((history) => history.slice(0, -1));
+    setEditHit(last.index);
+    setReplacement(recordedChord(last.hit));
+    setStatus(`Edit undone · ${last.hit.label} restored`);
   }
   async function download() {
     setExporting(true);
@@ -713,10 +758,14 @@ export default function Home() {
                 </div>
               ) : (
                 hits.map((h, i) => (
-                  <div
+                  <button
                     key={i}
+                    disabled={mode !== 'idle' || exporting}
+                    onClick={() => selectRecordedHit(i)}
+                    aria-label={`Edit recorded chord ${i + 1}: ${h.label} at ${h.time.toFixed(3)} seconds`}
+                    aria-pressed={editHit === i}
                     title={`${h.label} at ${h.time.toFixed(3)}s · ${h.duration}s · ${h.instrument}`}
-                    className="clip"
+                    className={`clip ${editHit === i ? 'selected-clip' : ''}`}
                     style={{
                       left: `${(h.time / scale) * 100}%`,
                       width: `${(h.duration / scale) * 100}%`,
@@ -725,7 +774,7 @@ export default function Home() {
                     }}
                   >
                     {h.label}
-                  </div>
+                  </button>
                 ))
               )}
               {hits.length > 0 && mode !== 'recording' && (
@@ -758,6 +807,99 @@ export default function Home() {
               )}
             </div>
           </div>
+          {hits.length > 0 && mode !== 'recording' && (
+            <section
+              className="recorded-editor"
+              aria-label="Edit recorded chord"
+            >
+              <div className="recorded-editor-heading">
+                <h3>Correct a chord</h3>
+                <button
+                  className="undo-edit"
+                  disabled={!undoEdits.length || mode !== 'idle' || exporting}
+                  onClick={undoRecordedEdit}
+                >
+                  <Undo2 size={15} /> Undo edit
+                </button>
+              </div>
+              <p>
+                Click a chord in the timeline, or choose it here. Only that
+                occurrence changes.
+              </p>
+              <Choice
+                label="Recorded chord"
+                value={editHit === null ? 'none' : String(editHit)}
+                options={[
+                  { value: 'none', label: 'Choose a recorded chord' },
+                  ...hits.map((hit, index) => ({
+                    value: String(index),
+                    label: `${index + 1}. ${hit.label} · ${hit.time.toFixed(3)} s`,
+                  })),
+                ]}
+                onChange={(value) => {
+                  if (value === 'none') setEditHit(null);
+                  else selectRecordedHit(Number(value));
+                }}
+                disabled={mode !== 'idle' || exporting}
+              />
+              {editHit !== null && hits[editHit] && (
+                <>
+                  <div className="replacement-fields">
+                    <Choice
+                      label="Replacement root"
+                      value={String(replacement.root)}
+                      options={ROOTS.map((label, value) => ({
+                        value: String(value),
+                        label,
+                      }))}
+                      onChange={(value) =>
+                        setReplacement((chord) => ({
+                          ...chord,
+                          root: Number(value),
+                        }))
+                      }
+                      disabled={mode !== 'idle' || exporting}
+                    />
+                    <Choice
+                      label="Replacement chord type"
+                      value={replacement.quality}
+                      options={Object.entries(QUALITIES)
+                        .filter(([key]) => key !== 'off')
+                        .map(([value, chord]) => ({
+                          value,
+                          label: chord.label,
+                        }))}
+                      onChange={(value) =>
+                        setReplacement((chord) => ({
+                          ...chord,
+                          quality: value,
+                        }))
+                      }
+                      disabled={mode !== 'idle' || exporting}
+                    />
+                    <button
+                      className="replace-chord"
+                      onClick={applyRecordedEdit}
+                      disabled={
+                        mode !== 'idle' ||
+                        exporting ||
+                        hits[editHit].label === chordLabel(replacement)
+                      }
+                    >
+                      Replace {hits[editHit].label} with{' '}
+                      {chordLabel(replacement)}
+                    </button>
+                  </div>
+                  <small>
+                    {hits[editHit].time.toFixed(3)} s ·{' '}
+                    {hits[editHit].duration.toFixed(1)} s duration ·{' '}
+                    {hits[editHit].instrument} · Timing and sound settings stay
+                    the same
+                  </small>
+                </>
+              )}
+            </section>
+          )}
           {hits.length > 0 && mode !== 'recording' && (
             <section className="trim-panel" aria-label="Trim recording">
               <div className="trim-heading">

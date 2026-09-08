@@ -294,3 +294,41 @@ export function playbackPosition(
   const time = Math.max(0, elapsed);
   return loop ? time % duration : Math.min(time, duration);
 }
+
+/** Identify the chord captured in a take, independently of today's pad setup. */
+export function recordedChord(hit: Hit): Pad {
+  const root = (((hit.notes[0] - 48) % 12) + 12) % 12;
+  const quality = Object.keys(QUALITIES).find((key) => {
+    const notes = chordNotes({ root, quality: key });
+    return (
+      notes.length === hit.notes.length &&
+      notes.every((note, i) => note === hit.notes[i])
+    );
+  });
+  if (!quality)
+    throw new Error('The recorded chord is not in the chord library.');
+  return { root, quality };
+}
+
+export function replaceRecordedChord(
+  hits: Hit[],
+  index: number,
+  chord: Pad,
+): Hit[] {
+  if (
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= hits.length ||
+    !Number.isInteger(chord.root) ||
+    chord.root < 0 ||
+    chord.root > 11 ||
+    !Object.hasOwn(QUALITIES, chord.quality) ||
+    chord.quality === 'off'
+  )
+    throw new RangeError('Choose a recorded chord and a valid replacement.');
+  return hits.map((hit, i) =>
+    i === index
+      ? { ...hit, notes: chordNotes(chord), label: chordLabel(chord) }
+      : hit,
+  );
+}

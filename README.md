@@ -7,6 +7,7 @@ A browser instrument built with React/Vinext and the Web Audio API. Run `npm ins
 - Set the fixed chord duration and volume. Holding a key does not extend the chord.
 - Record, perform, then Stop. Replay and Download WAV preserve instrument/settings per event, timing, gaps, overlap, and full tails. Record new take replaces the previous take.
 - After Stop, drag the trim handles or enter start/end seconds (millisecond precision). Replay and WAV download use only the selection, including chords already ringing at its start. Reset to full take restores the original; trimming never deletes it.
+- After Stop, select a recorded chord in the timeline or the occurrence list. Choose a replacement root/type and press Replace. Only that occurrence changes; timing, duration, instrument, volume and trim boundaries stay fixed. Replay, Loop and WAV export use the correction. Undo edit restores changes in reverse order.
 - Recordings are tab-local, capped at three minutes, and are not saved across page refresh. Download before closing. WAV is mono 16-bit PCM at the audio context's sample rate.
 
 ## Validation

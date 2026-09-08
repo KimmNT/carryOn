@@ -834,3 +834,89 @@ footer > span:first-child {
 .transport-buttons {
   flex-wrap: wrap;
 }
+.clip {
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.clip:disabled {
+  opacity: 0.9;
+}
+.selected-clip {
+  outline: 2px solid #f1ffe3;
+  outline-offset: 1px;
+  z-index: 1;
+}
+.recorded-editor {
+  padding-top: 18px;
+}
+.recorded-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.recorded-editor h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.recorded-editor p,
+.recorded-editor small {
+  font-size: 12px;
+  color: #a2b09c;
+  line-height: 1.6;
+}
+.recorded-editor p {
+  margin: 6px 0 12px;
+}
+.recorded-editor > .choice {
+  width: 100%;
+  max-width: 440px;
+}
+.undo-edit,
+.replace-chord {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 1px solid #49583f;
+  border-radius: 7px;
+  font-size: 13px;
+  color: #d8edc6;
+  background: #293522;
+}
+.replacement-fields {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+.replacement-fields > .choice {
+  width: 160px;
+}
+.replacement-fields > .choice:first-child {
+  width: 100px;
+}
+.replace-chord {
+  background: #b9fa73;
+  color: #17220e;
+  font-weight: 600;
+}
+.trim-panel {
+  margin-top: 17px;
+  border-top: 1px solid #34402d;
+}
+@media (max-width: 520px) {
+  .replacement-fields {
+    flex-wrap: wrap;
+  }
+  .replacement-fields > .choice,
+  .replacement-fields > .choice:first-child {
+    width: calc(50% - 5px);
+  }
+  .replace-chord {
+    width: 100%;
+  }
+}
