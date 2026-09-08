@@ -49,6 +49,7 @@ import {
 
 import { mixTracks } from '@/lib/instrument';
 type Track = {
+  loop?: boolean;
   name: string;
   instrument: Instrument;
   hits: Hit[];
@@ -897,7 +898,7 @@ export default function Home() {
                   disabled={mode !== 'idle' || exporting}
                   onClick={() => switchTrack(i)}
                 >
-                  {track.name} · {track.instrument}{' '}
+                  {track.name} · {track.instrument} {track.loop ? '↻ ' : ''}
                   <small>
                     {track.hits.length
                       ? (track.trim[1] - track.trim[0]).toFixed(1) + ' s'
@@ -916,6 +917,24 @@ export default function Home() {
               Recording, trimming and chord edits affect the selected track.
               Trimmed tracks start together from zero.
             </p>
+            <label style={{ display: 'block', marginBottom: 10 }}>
+              <input
+                type="checkbox"
+                checked={!!tracks[trackIndex].loop}
+                disabled={mode !== 'idle' || exporting}
+                onChange={(e) =>
+                  setTracks(
+                    currentTracks.map((track, i) =>
+                      i === trackIndex
+                        ? { ...track, loop: e.target.checked }
+                        : track,
+                    ),
+                  )
+                }
+              />{' '}
+              Loop {tracks[trackIndex].name} until the longest track ends (play
+              all &amp; mix download)
+            </label>
             <label>
               <input
                 type="checkbox"

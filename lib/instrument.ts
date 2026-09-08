@@ -405,18 +405,25 @@ export function replaceRecordedChord(
   );
 }
 export type AudioTrack = {
+  loop?: boolean;
   hits: Hit[];
   length: number;
   trim: [number, number];
 };
-/** Each trimmed take begins at session zero. Shorter layers end in silence. */
+/** Loop selected layers up to the longest trimmed take, never extending the mix. */
 export function mixTracks(tracks: AudioTrack[], rate: number) {
   const layers = tracks
     .filter((t) => t.hits.length && t.trim[1] > t.trim[0])
-    .map((t) => trimAudio(renderTake(t.hits, t.length, rate), rate, ...t.trim));
-  const mixed = new Float32Array(Math.max(0, ...layers.map((p) => p.length)));
+    .map((t) => ({
+      loop: t.loop,
+      pcm: trimAudio(renderTake(t.hits, t.length, rate), rate, ...t.trim),
+    }));
+  const mixed = new Float32Array(
+    Math.max(0, ...layers.map((p) => p.pcm.length)),
+  );
   for (const layer of layers)
-    for (let i = 0; i < layer.length; i++) mixed[i] += layer[i];
+    for (let i = 0; i < (layer.loop ? mixed.length : layer.pcm.length); i++)
+      mixed[i] += layer.pcm[i % layer.pcm.length];
   let peak = 1;
   for (const sample of mixed) peak = Math.max(peak, Math.abs(sample));
   if (peak > 1) for (let i = 0; i < mixed.length; i++) mixed[i] /= peak;

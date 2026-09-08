@@ -35,3 +35,14 @@ assert.ok(
     (x) => Number.isFinite(x) && Math.abs(x) <= 1,
   ),
 );
+
+const looped = mixTracks([{ ...a, loop: true }, b], rate);
+assert.equal(looped.length, other.length);
+for (let i = 0; i < looped.length; i++)
+  assert.ok(Math.abs(looped[i] - (solo[i % solo.length] + other[i])) < 1e-7);
+assert.deepEqual(mixTracks([{ ...a, loop: true }], rate), solo);
+assert.equal(
+  mixTracks([{ hits: [], length: 0, trim: [0, 0], loop: true }], rate).length,
+  0,
+);
+assert.deepEqual([a, b], original);
