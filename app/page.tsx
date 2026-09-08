@@ -4,6 +4,7 @@ import {
   Circle,
   Square,
   Play,
+  Repeat2,
   Download,
   Music2,
   Headphones,
@@ -32,6 +33,7 @@ import {
   SOUND_VERSION,
   takeLength,
   trimAudio,
+  playbackPosition,
   renderTake,
   encodeWav,
   type Hit,
@@ -111,7 +113,7 @@ export default function Home() {
     rate: number;
     pcm: Float32Array;
   } | null>(null);
-  const playbackRange = useRef({ offset: 0, duration: 0 });
+  const playbackRange = useRef({ offset: 0, duration: 0, loop: false });
   const buffers = useRef(new Map<string, AudioBuffer>());
   const audio = useRef<AudioContext | null>(null),
     sources = useRef(new Set<AudioBufferSourceNode>()),
@@ -159,9 +161,17 @@ export default function Home() {
     buffers.current.set(key, buffer);
     return buffer;
   }
-  function playBuffer(ctx: AudioContext, buffer: AudioBuffer, when: number) {
+  function playBuffer(
+    ctx: AudioContext,
+    buffer: AudioBuffer,
+    when: number,
+    loop = false,
+  ) {
     const s = ctx.createBufferSource();
     s.buffer = buffer;
+    s.loop = loop;
+    s.loopStart = 0;
+    s.loopEnd = buffer.duration;
     s.connect(ctx.destination);
     sources.current.add(s);
     s.onended = () => {
@@ -287,7 +297,7 @@ export default function Home() {
     }
     return trimAudio(cached.pcm, rate, trim[0], trim[1]);
   }
-  async function replay() {
+  async function replay(loop = false) {
     try {
       const ctx = await unlock();
       silence();
@@ -296,14 +306,22 @@ export default function Home() {
       buffer.getChannelData(0).set(pcm);
       // Prepare the selected audio before starting the playback clock.
       start.current = ctx.currentTime + 0.06;
-      playbackRange.current = { offset: trim[0], duration: buffer.duration };
+      playbackRange.current = {
+        offset: trim[0],
+        duration: buffer.duration,
+        loop,
+      };
       endTime.current = start.current + buffer.duration;
-      playBuffer(ctx, buffer, start.current);
+      playBuffer(ctx, buffer, start.current, loop);
       setClock(0);
       modeRef.current = 'playing';
       setMode('playing');
       setStatus(
-        isTrimmed ? 'Playing selected range' : 'Playing your full take',
+        loop
+          ? 'Looping selected range · press Stop to finish'
+          : isTrimmed
+            ? 'Playing selected range once'
+            : 'Playing your full take once',
       );
     } catch {
       silence();
@@ -373,7 +391,15 @@ export default function Home() {
       const ctx = audio.current;
       if (!ctx) return;
       const t = Math.max(0, ctx.currentTime - start.current);
-      setClock(t);
+      const position =
+        mode === 'playing'
+          ? playbackPosition(
+              t,
+              playbackRange.current.duration,
+              playbackRange.current.loop,
+            )
+          : t;
+      setClock(position);
       if (mode === 'recording' && t >= 180) {
         stopRef.current();
         setStatus('Three-minute take complete · ready to export');
@@ -383,12 +409,12 @@ export default function Home() {
           hits
             .filter(
               (h) =>
-                t + playbackRange.current.offset >= h.time &&
+                position + playbackRange.current.offset >= h.time &&
                 t + playbackRange.current.offset < h.time + h.duration,
             )
             .map((h) => h.pad),
         );
-        if (ctx.currentTime >= endTime.current) {
+        if (!playbackRange.current.loop && ctx.currentTime >= endTime.current) {
           setMode('idle');
           modeRef.current = 'idle';
           setClock(playbackRange.current.duration);
@@ -656,7 +682,9 @@ export default function Home() {
                 {mode === 'recording'
                   ? '● REC'
                   : mode === 'playing'
-                    ? '▶ PLAY'
+                    ? playbackRange.current.loop
+                      ? '↻ LOOP'
+                      : '▶ PLAY'
                     : 'TAKE'}
               </span>
               {fmt(clock)}
@@ -817,10 +845,18 @@ export default function Home() {
               </button>
               <button
                 disabled={!hits.length || mode !== 'idle' || exporting}
-                onClick={replay}
+                onClick={() => replay(false)}
               >
                 <Play size={15} fill="currentColor" />
                 Replay
+              </button>
+              <button
+                disabled={!hits.length || mode !== 'idle' || exporting}
+                onClick={() => replay(true)}
+                aria-label="Loop selected range"
+              >
+                <Repeat2 size={16} />
+                Loop
               </button>
             </div>
             <button

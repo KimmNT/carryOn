@@ -277,3 +277,14 @@ export function trimAudio(
     throw new RangeError('The selection must contain audio samples.');
   return samples.slice(first, last);
 }
+
+/** Visual position follows the audio clock; native buffer looping owns timing. */
+export function playbackPosition(
+  elapsed: number,
+  duration: number,
+  loop: boolean,
+) {
+  if (duration <= 0) return 0;
+  const time = Math.max(0, elapsed);
+  return loop ? time % duration : Math.min(time, duration);
+}
