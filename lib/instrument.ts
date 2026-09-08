@@ -27,6 +27,8 @@ export const QUALITIES: Record<string, { label: string; intervals: number[] }> =
   {
     major: { label: 'Major', intervals: [0, 4, 7] },
     minor: { label: 'Minor', intervals: [0, 3, 7] },
+    add9: { label: 'Add 9', intervals: [0, 4, 7, 14] },
+    '6': { label: 'Major 6', intervals: [0, 4, 7, 9] },
     maj7: { label: 'Major 7', intervals: [0, 4, 7, 11] },
     min7: { label: 'Minor 7', intervals: [0, 3, 7, 10] },
     '7': { label: 'Dominant 7', intervals: [0, 4, 7, 10] },
@@ -62,11 +64,15 @@ export function chordNoteNames(p: Pad) {
   const letters = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
   const natural = [0, 2, 4, 5, 7, 9, 11];
   const degrees =
-    p.quality === 'sus2'
-      ? [0, 1, 4]
-      : p.quality === 'sus4'
-        ? [0, 3, 4]
-        : [0, 2, 4, 6];
+    p.quality === 'add9'
+      ? [0, 2, 4, 8]
+      : p.quality === '6'
+        ? [0, 2, 4, 5]
+        : p.quality === 'sus2'
+          ? [0, 1, 4]
+          : p.quality === 'sus4'
+            ? [0, 3, 4]
+            : [0, 2, 4, 6];
   const rootLetter = letters.indexOf(ROOTS[p.root][0]);
   return chordNotes(p).map((note, i) => {
     const letter = (rootLetter + degrees[i]) % 7;
