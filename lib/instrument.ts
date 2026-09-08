@@ -1,6 +1,7 @@
 export type Instrument = 'piano' | 'guitar' | 'organ';
-export type Pad = { root: number; quality: string };
+export type Pad = { root: number; quality: string; bass?: string };
 export type Hit = {
+  chord?: Pad;
   pad: number;
   time: number;
   notes: number[];
@@ -28,8 +29,11 @@ export const QUALITIES: Record<string, { label: string; intervals: number[] }> =
     major: { label: 'Major', intervals: [0, 4, 7] },
     minor: { label: 'Minor', intervals: [0, 3, 7] },
     add9: { label: 'Add 9', intervals: [0, 4, 7, 14] },
+    minadd9: { label: 'Minor add 9', intervals: [0, 3, 7, 14] },
     '6': { label: 'Major 6', intervals: [0, 4, 7, 9] },
+    min6: { label: 'Minor 6', intervals: [0, 3, 7, 9] },
     maj7: { label: 'Major 7', intervals: [0, 4, 7, 11] },
+    minmaj7: { label: 'Minor major 7', intervals: [0, 3, 7, 11] },
     min7: { label: 'Minor 7', intervals: [0, 3, 7, 10] },
     '7': { label: 'Dominant 7', intervals: [0, 4, 7, 10] },
     sus2: { label: 'Sus 2', intervals: [0, 2, 7] },
@@ -37,6 +41,57 @@ export const QUALITIES: Record<string, { label: string; intervals: number[] }> =
     dim: { label: 'Diminished', intervals: [0, 3, 6] },
     off: { label: 'Unassigned', intervals: [] },
   };
+export const BASS_NOTES: Record<string, number> = {
+  C: 0,
+  'C♯': 1,
+  'D♭': 1,
+  D: 2,
+  'D♯': 3,
+  'E♭': 3,
+  E: 4,
+  'F♭': 4,
+  'E♯': 5,
+  F: 5,
+  'F♯': 6,
+  'G♭': 6,
+  G: 7,
+  'G♯': 8,
+  'A♭': 8,
+  A: 9,
+  'A♯': 10,
+  'B♭': 10,
+  B: 11,
+  'C♭': 11,
+};
+const CHORD_PARTS: Record<string, [string, string]> = {
+  major: ['major', 'none'],
+  minor: ['minor', 'none'],
+  '6': ['major', '6'],
+  min6: ['minor', '6'],
+  '7': ['major', '7'],
+  min7: ['minor', '7'],
+  maj7: ['major', 'maj7'],
+  minmaj7: ['minor', 'maj7'],
+  add9: ['major', 'add9'],
+  minadd9: ['minor', 'add9'],
+  sus2: ['sus2', 'none'],
+  sus4: ['sus4', 'none'],
+  dim: ['dim', 'none'],
+  off: ['off', 'none'],
+};
+export function splitQuality(quality: string) {
+  const [family, extension] = CHORD_PARTS[quality];
+  return { family, extension };
+}
+export function joinQuality(family: string, extension: string) {
+  if (!['major', 'minor'].includes(family)) return family;
+  return (
+    Object.keys(CHORD_PARTS).find(
+      (key) =>
+        CHORD_PARTS[key][0] === family && CHORD_PARTS[key][1] === extension,
+    ) ?? family
+  );
+}
 export const DEFAULT_PADS: Pad[] = [
   { root: 0, quality: 'major' },
   { root: 7, quality: 'major' },
@@ -53,20 +108,29 @@ export function chordLabel(p: Pad) {
   return p.quality === 'off'
     ? '—'
     : ROOTS[p.root] +
-        ({ major: '', minor: 'm', maj7: 'maj7', min7: 'm7' }[p.quality] ??
-          p.quality);
+        ({
+          major: '',
+          minor: 'm',
+          maj7: 'maj7',
+          min7: 'm7',
+          min6: 'm6',
+          minadd9: 'm(add9)',
+          minmaj7: 'm(maj7)',
+        }[p.quality] ?? p.quality) +
+        (p.bass ? '/' + p.bass : '');
 }
 export function chordNotes(p: Pad) {
-  return QUALITIES[p.quality].intervals.map((n) => 48 + p.root + n);
+  const notes = QUALITIES[p.quality].intervals.map((n) => 48 + p.root + n);
+  return p.bass && notes.length ? [36 + BASS_NOTES[p.bass], ...notes] : notes;
 }
 // Spell chord members by scale degree (B major is B–D♯–F♯, not B–E♭–F♯).
 export function chordNoteNames(p: Pad) {
   const letters = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
   const natural = [0, 2, 4, 5, 7, 9, 11];
   const degrees =
-    p.quality === 'add9'
+    p.quality === 'add9' || p.quality === 'minadd9'
       ? [0, 2, 4, 8]
-      : p.quality === '6'
+      : p.quality === '6' || p.quality === 'min6'
         ? [0, 2, 4, 5]
         : p.quality === 'sus2'
           ? [0, 1, 4]
@@ -74,7 +138,7 @@ export function chordNoteNames(p: Pad) {
             ? [0, 3, 4]
             : [0, 2, 4, 6];
   const rootLetter = letters.indexOf(ROOTS[p.root][0]);
-  return chordNotes(p).map((note, i) => {
+  const upper = chordNotes({ ...p, bass: undefined }).map((note, i) => {
     const letter = (rootLetter + degrees[i]) % 7;
     const accidental = (((note % 12) - natural[letter] + 18) % 12) - 6;
     return (
@@ -82,6 +146,7 @@ export function chordNoteNames(p: Pad) {
       (accidental < 0 ? '♭'.repeat(-accidental) : '♯'.repeat(accidental))
     );
   });
+  return p.bass && upper.length ? [p.bass, ...upper] : upper;
 }
 export function takeLength(hits: Hit[], stopped: number) {
   return Math.max(stopped, ...hits.map((h) => h.time + h.duration), 0);
@@ -297,6 +362,7 @@ export function playbackPosition(
 
 /** Identify the chord captured in a take, independently of today's pad setup. */
 export function recordedChord(hit: Hit): Pad {
+  if (hit.chord) return { ...hit.chord };
   const root = (((hit.notes[0] - 48) % 12) + 12) % 12;
   const quality = Object.keys(QUALITIES).find((key) => {
     const notes = chordNotes({ root, quality: key });
@@ -323,12 +389,18 @@ export function replaceRecordedChord(
     chord.root < 0 ||
     chord.root > 11 ||
     !Object.hasOwn(QUALITIES, chord.quality) ||
-    chord.quality === 'off'
+    chord.quality === 'off' ||
+    (chord.bass !== undefined && !Object.hasOwn(BASS_NOTES, chord.bass))
   )
     throw new RangeError('Choose a recorded chord and a valid replacement.');
   return hits.map((hit, i) =>
     i === index
-      ? { ...hit, notes: chordNotes(chord), label: chordLabel(chord) }
+      ? {
+          ...hit,
+          chord: { ...chord },
+          notes: chordNotes(chord),
+          label: chordLabel(chord),
+        }
       : hit,
   );
 }

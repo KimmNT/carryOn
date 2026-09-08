@@ -920,3 +920,39 @@ footer > span:first-child {
     width: 100%;
   }
 }
+
+.chord-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(95px, 1fr));
+  gap: 10px;
+  flex: 1;
+}
+.chord-picker > div {
+  min-width: 0;
+}
+.chord-picker > div > span {
+  display: block;
+  font-size: 13px;
+  color: #aaa;
+  margin-bottom: 6px;
+}
+.editor .chord-picker .choice,
+.replacement-fields .chord-picker .choice {
+  width: 100%;
+}
+.editor {
+  flex-wrap: wrap;
+}
+.editor > p {
+  flex-basis: 100%;
+}
+.replacement-fields {
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+@media (max-width: 650px) {
+  .chord-picker {
+    grid-template-columns: repeat(2, minmax(100px, 1fr));
+    flex-basis: 100%;
+  }
+}

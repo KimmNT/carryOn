@@ -24,6 +24,9 @@ import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import {
   ROOTS,
+  BASS_NOTES,
+  splitQuality,
+  joinQuality,
   QUALITIES,
   DEFAULT_PADS,
   chordLabel,
@@ -89,6 +92,94 @@ function Choice({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+function ChordPicker({
+  chord,
+  onChange,
+  prefix,
+  allowOff = false,
+  disabled = false,
+}: {
+  chord: Pad;
+  onChange: (chord: Pad) => void;
+  prefix: string;
+  allowOff?: boolean;
+  disabled?: boolean;
+}) {
+  const { family, extension } = splitQuality(chord.quality);
+  const basic = family === 'major' || family === 'minor';
+  return (
+    <div className="chord-picker">
+      <div>
+        <span>Root</span>
+        <Choice
+          label={prefix + ' root'}
+          value={String(chord.root)}
+          options={ROOTS.map((label, value) => ({
+            label,
+            value: String(value),
+          }))}
+          onChange={(v) => onChange({ ...chord, root: Number(v) })}
+          disabled={disabled}
+        />
+      </div>
+      <div>
+        <span>Chord family</span>
+        <Choice
+          label={prefix + ' family'}
+          value={family}
+          options={[
+            { value: 'major', label: 'Major' },
+            { value: 'minor', label: 'Minor' },
+            { value: 'sus2', label: 'Sus 2' },
+            { value: 'sus4', label: 'Sus 4' },
+            { value: 'dim', label: 'Diminished' },
+            ...(allowOff ? [{ value: 'off', label: 'Unassigned' }] : []),
+          ]}
+          onChange={(v) =>
+            onChange({ ...chord, quality: joinQuality(v, extension) })
+          }
+          disabled={disabled}
+        />
+      </div>
+      <div>
+        <span>Extension</span>
+        <Choice
+          label={prefix + ' extension'}
+          value={extension}
+          options={[
+            { value: 'none', label: 'None' },
+            { value: '6', label: '6' },
+            { value: '7', label: '7' },
+            { value: 'maj7', label: 'Major 7' },
+            { value: 'add9', label: 'Add 9' },
+          ]}
+          onChange={(v) =>
+            onChange({ ...chord, quality: joinQuality(family, v) })
+          }
+          disabled={disabled || !basic}
+        />
+      </div>
+      <div>
+        <span>Bass / slash</span>
+        <Choice
+          label={prefix + ' bass'}
+          value={chord.bass ?? 'none'}
+          options={[
+            { value: 'none', label: 'Default' },
+            ...Object.keys(BASS_NOTES).map((value) => ({
+              value,
+              label: value,
+            })),
+          ]}
+          onChange={(v) =>
+            onChange({ ...chord, bass: v === 'none' ? undefined : v })
+          }
+          disabled={disabled || family === 'off'}
+        />
+      </div>
+    </div>
   );
 }
 const fmt = (t: number) =>
@@ -198,6 +289,7 @@ export default function Home() {
     const snapshot: Hit = {
       pad: i,
       time: 0,
+      chord: { ...p },
       notes: chordNotes(p),
       label: chordLabel(p),
       instrument: s.instrument,
@@ -687,32 +779,18 @@ export default function Home() {
             </span>
             <strong>Edit pad {KEYS[selected]}</strong>
           </div>
-          <Choice
-            label="Chord root"
-            value={String(chosen.root)}
-            options={ROOTS.map((r, i) => ({ value: String(i), label: r }))}
-            onChange={(v) =>
-              setPads((p) =>
-                p.map((x, i) =>
-                  i === selected ? { ...x, root: Number(v) } : x,
-                ),
-              )
+          <ChordPicker
+            chord={chosen}
+            prefix="Chord"
+            allowOff
+            onChange={(chord) =>
+              setPads((p) => p.map((x, i) => (i === selected ? chord : x)))
             }
           />
-          <Choice
-            label="Chord type"
-            value={chosen.quality}
-            options={Object.entries(QUALITIES).map(([value, q]) => ({
-              value,
-              label: q.label,
-            }))}
-            onChange={(v) =>
-              setPads((p) =>
-                p.map((x, i) => (i === selected ? { ...x, quality: v } : x)),
-              )
-            }
-          />
-          <p>Choose a root and chord type. Use “Unassigned” for fewer pads.</p>
+          <p>
+            Choose a family, then an extension. Bass adds the note after the
+            slash. Sus and diminished use no extension.
+          </p>
         </section>
         <section className="recorder" aria-label="Performance recorder">
           <div className="recorder-head">
@@ -845,36 +923,10 @@ export default function Home() {
               {editHit !== null && hits[editHit] && (
                 <>
                   <div className="replacement-fields">
-                    <Choice
-                      label="Replacement root"
-                      value={String(replacement.root)}
-                      options={ROOTS.map((label, value) => ({
-                        value: String(value),
-                        label,
-                      }))}
-                      onChange={(value) =>
-                        setReplacement((chord) => ({
-                          ...chord,
-                          root: Number(value),
-                        }))
-                      }
-                      disabled={mode !== 'idle' || exporting}
-                    />
-                    <Choice
-                      label="Replacement chord type"
-                      value={replacement.quality}
-                      options={Object.entries(QUALITIES)
-                        .filter(([key]) => key !== 'off')
-                        .map(([value, chord]) => ({
-                          value,
-                          label: chord.label,
-                        }))}
-                      onChange={(value) =>
-                        setReplacement((chord) => ({
-                          ...chord,
-                          quality: value,
-                        }))
-                      }
+                    <ChordPicker
+                      chord={replacement}
+                      prefix="Replacement"
+                      onChange={setReplacement}
                       disabled={mode !== 'idle' || exporting}
                     />
                     <button
