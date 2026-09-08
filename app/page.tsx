@@ -211,7 +211,9 @@ export default function Home() {
     [volume, setVolume] = useState(0.7),
     [selected, setSelected] = useState(0),
     [active, setActive] = useState<number[]>([]),
-    [mode, setMode] = useState<'idle' | 'recording' | 'playing'>('idle'),
+    [mode, setMode] = useState<'idle' | 'countin' | 'recording' | 'playing'>(
+      'idle',
+    ),
     [hits, setHits] = useState<Hit[]>([]),
     [editHit, setEditHit] = useState<number | null>(null),
     [replacement, setReplacement] = useState<Pad>({
@@ -259,6 +261,8 @@ export default function Home() {
     takeCache.current = null;
     setStatus(track.name + ' selected');
   }
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countInToken = useRef(0);
   const takeCache = useRef<{
     hits: Hit[];
     length: number;
@@ -334,7 +338,7 @@ export default function Home() {
   }
 
   async function trigger(i: number) {
-    if (modeRef.current === 'playing') return;
+    if (modeRef.current === 'playing' || modeRef.current === 'countin') return;
     const s = settings.current,
       p = s.pads[i];
     if (!p || p.quality === 'off') return;
@@ -370,6 +374,10 @@ export default function Home() {
     void trigger(i);
   };
   function stop() {
+    countInToken.current++;
+    setCountdown(null);
+    if (modeRef.current === 'countin')
+      setStatus('Count-in cancelled · existing take kept');
     if (recording.current) {
       recording.current = false;
       const elapsed = Math.max(
@@ -396,6 +404,10 @@ export default function Home() {
   }
   stopRef.current = stop;
   async function record() {
+    if (modeRef.current !== 'idle' || exporting) return;
+    const token = ++countInToken.current;
+    modeRef.current = 'countin';
+    setMode('countin');
     try {
       const ctx = await unlock();
       silence();
@@ -410,6 +422,14 @@ export default function Home() {
         backingBuffer = ctx.createBuffer(1, backing.length, ctx.sampleRate);
         backingBuffer.getChannelData(0).set(backing);
       }
+      for (let n = 3; n >= 1; n--) {
+        if (token !== countInToken.current) return;
+        setCountdown(n);
+        setStatus('Recording starts in ' + n);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (token !== countInToken.current) return;
+      setCountdown(null);
       recorded.current = [];
       setHits([]);
       setEditHit(null);
@@ -425,6 +445,10 @@ export default function Home() {
       setMode('recording');
       setStatus('Recording · play your chords');
     } catch {
+      if (token !== countInToken.current) return;
+      setCountdown(null);
+      modeRef.current = 'idle';
+      setMode('idle');
       setStatus('Audio unavailable. Try again.');
     }
   }
@@ -591,6 +615,7 @@ export default function Home() {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
       window.removeEventListener('blur', blur);
+      countInToken.current++;
       const context = audio.current;
       audio.current = null;
       sources.current.clear();
@@ -599,7 +624,7 @@ export default function Home() {
     };
   }, []);
   useEffect(() => {
-    if (mode === 'idle') return;
+    if (mode === 'idle' || mode === 'countin') return;
     const timer = setInterval(() => {
       const ctx = audio.current;
       if (!ctx) return;
@@ -917,33 +942,42 @@ export default function Home() {
               Recording, trimming and chord edits affect the selected track.
               Trimmed tracks start together from zero.
             </p>
-            <label style={{ display: 'block', marginBottom: 10 }}>
-              <input
-                type="checkbox"
-                checked={!!tracks[trackIndex].loop}
+            <div className="track-options">
+              <button
+                className="track-toggle"
+                role="switch"
+                aria-checked={!!tracks[trackIndex].loop}
                 disabled={mode !== 'idle' || exporting}
-                onChange={(e) =>
+                onClick={() =>
                   setTracks(
                     currentTracks.map((track, i) =>
                       i === trackIndex
-                        ? { ...track, loop: e.target.checked }
+                        ? { ...track, loop: !track.loop }
                         : track,
                     ),
                   )
                 }
-              />{' '}
-              Loop {tracks[trackIndex].name} until the longest track ends (play
-              all &amp; mix download)
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={monitor}
-                onChange={(e) => setMonitor(e.target.checked)}
+              >
+                <span className="toggle-light" aria-hidden="true" />
+                <span>
+                  <strong>Loop this track</strong>
+                  <small>Repeat until the longest track ends</small>
+                </span>
+              </button>
+              <button
+                className="track-toggle"
+                role="switch"
+                aria-checked={monitor}
                 disabled={mode !== 'idle' || exporting}
-              />{' '}
-              Hear other tracks while recording
-            </label>
+                onClick={() => setMonitor(!monitor)}
+              >
+                <span className="toggle-light" aria-hidden="true" />
+                <span>
+                  <strong>Play along</strong>
+                  <small>Hear other tracks while recording</small>
+                </span>
+              </button>
+            </div>
             <div className="layer-actions">
               <button
                 disabled={!hasMix || mode !== 'idle' || exporting}
@@ -965,6 +999,13 @@ export default function Home() {
               </button>
             </div>
           </section>
+          {countdown !== null && (
+            <div className="count-in" role="status" aria-live="assertive">
+              <span>GET READY</span>
+              <strong key={countdown}>{countdown}</strong>
+              <small>Recording starts after 1 · Stop to cancel</small>
+            </div>
+          )}
           <div className="timeline">
             <div className="ruler">
               {Array.from({ length: 5 }, (_, i) => (
