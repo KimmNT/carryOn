@@ -49,6 +49,7 @@ import {
 
 import { mixTracks } from '@/lib/instrument';
 type Track = {
+  offset?: number;
   loop?: boolean;
   name: string;
   instrument: Instrument;
@@ -227,39 +228,80 @@ export default function Home() {
     [trimDraft, setTrimDraft] = useState<[string, string]>(['0.000', '0.000']),
     [status, setStatus] = useState('Ready when you are'),
     [exporting, setExporting] = useState(false);
-  const [tracks, setTracks] = useState<Track[]>([
-    emptyTrack('Track 1', 'piano'),
-  ]);
-  const [trackIndex, setTrackIndex] = useState(0);
-  const [monitor, setMonitor] = useState(true);
-  const currentTracks = tracks.map((track, i) =>
-    i === trackIndex
-      ? { ...track, instrument, hits, length, trim, undo: undoEdits }
-      : track,
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [tab, setTab] = useState<'record' | 'session'>('record');
+  const [sessionLength, setSessionLength] = useState(10);
+  const [takeName, setTakeName] = useState('');
+  const [selectedTakes, setSelectedTakes] = useState<number[]>([]);
+  const [storageReady, setStorageReady] = useState(false);
+  const currentTracks = tracks.filter((_, i) => selectedTakes.includes(i));
+  const longestSelected = Math.max(
+    0,
+    ...currentTracks.map((t) => (t.offset ?? 0) + t.trim[1] - t.trim[0]),
   );
+  const mixLength = Math.max(sessionLength, longestSelected);
+  useEffect(() => {
+    setSessionLength((n) => Math.max(n, longestSelected));
+  }, [longestSelected]);
   const hasMix = currentTracks.some((t) => t.hits.length > 0);
-  function switchTrack(index: number, adding = false) {
-    if (modeRef.current !== 'idle' || exporting) return;
-    silence();
-    const next = adding
-      ? [
-          ...currentTracks,
-          emptyTrack('Track ' + (tracks.length + 1), instrument),
-        ]
-      : currentTracks;
-    const track = next[index];
-    setTracks(next);
-    setTrackIndex(index);
-    setInstrument(track.instrument);
-    setHits(track.hits);
-    recorded.current = track.hits;
-    setLength(track.length);
-    updateTrim(...track.trim);
-    setUndoEdits(track.undo);
-    setEditHit(null);
-    setClock(0);
-    takeCache.current = null;
-    setStatus(track.name + ' selected');
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('carryon-takes-v1');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (
+          Array.isArray(parsed) &&
+          parsed.every(
+            (t) =>
+              typeof t.name === 'string' &&
+              Array.isArray(t.hits) &&
+              Array.isArray(t.trim) &&
+              Number.isFinite(t.length),
+          )
+        )
+          setTracks(parsed);
+      }
+    } catch {
+      setStatus('Saved takes could not be loaded in this browser.');
+    }
+    setStorageReady(true);
+  }, []);
+  function persistTracks(next: Track[]) {
+    try {
+      localStorage.setItem('carryon-takes-v1', JSON.stringify(next));
+      setTracks(next);
+      return true;
+    } catch {
+      setStatus(
+        'Could not save in this browser. Download your take to keep it.',
+      );
+      return false;
+    }
+  }
+  function saveTake() {
+    if (
+      !hits.length ||
+      !takeName.trim() ||
+      modeRef.current !== 'idle' ||
+      !storageReady
+    )
+      return;
+    const next = [
+      ...tracks,
+      {
+        name: takeName.trim(),
+        instrument,
+        hits: structuredClone(hits),
+        length,
+        trim: [...trim] as [number, number],
+        undo: [],
+      },
+    ];
+    if (persistTracks(next)) {
+      setSelectedTakes([...selectedTakes, tracks.length]);
+      setStatus('Saved ' + takeName.trim() + ' to Session');
+      setTakeName('');
+    }
   }
   const [countdown, setCountdown] = useState<number | null>(null);
   const countInToken = useRef(0);
@@ -411,18 +453,7 @@ export default function Home() {
     try {
       const ctx = await unlock();
       silence();
-      const backing = monitor
-        ? mixTracks(
-            currentTracks.filter((_, i) => i !== trackIndex),
-            ctx.sampleRate,
-          )
-        : new Float32Array(0);
-      let backingBuffer: AudioBuffer | null = null;
-      if (backing.length) {
-        backingBuffer = ctx.createBuffer(1, backing.length, ctx.sampleRate);
-        backingBuffer.getChannelData(0).set(backing);
-      }
-      for (let n = 3; n >= 1; n--) {
+      for (let n = 4; n >= 1; n--) {
         if (token !== countInToken.current) return;
         setCountdown(n);
         setStatus('Recording starts in ' + n);
@@ -439,7 +470,6 @@ export default function Home() {
       takeCache.current = null;
       setClock(0);
       start.current = ctx.currentTime + 0.06;
-      if (backingBuffer) playBuffer(ctx, backingBuffer, start.current);
       recording.current = true;
       modeRef.current = 'recording';
       setMode('recording');
@@ -489,12 +519,16 @@ export default function Home() {
     }
     return trimAudio(cached.pcm, rate, trim[0], trim[1]);
   }
-  async function replay(loop = false, all = false) {
+  async function replay(loop = false, all = false, solo?: Track) {
     try {
       const ctx = await unlock();
       silence();
       const pcm = all
-        ? mixTracks(currentTracks, ctx.sampleRate)
+        ? mixTracks(
+            solo ? [{ ...solo, loop: false, offset: 0 }] : currentTracks,
+            ctx.sampleRate,
+            solo ? 0 : mixLength,
+          )
         : selectionAudio(ctx.sampleRate);
       const buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
       buffer.getChannelData(0).set(pcm);
@@ -567,7 +601,7 @@ export default function Home() {
       await new Promise((r) => setTimeout(r, 30));
       const rate = audio.current?.sampleRate ?? 44100;
       const wav = encodeWav(
-        all ? mixTracks(currentTracks, rate) : selectionAudio(rate),
+        all ? mixTracks(currentTracks, rate, mixLength) : selectionAudio(rate),
         rate,
       );
       const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
@@ -766,230 +800,615 @@ export default function Home() {
             <span /> LIVE SESSION
           </span>
         </div>
-        <section className="soundbar" aria-label="Instrument settings">
-          <div className="sound-icon">
-            <Music2 />
-          </div>
-          <div className="field instrument">
-            <label>Instrument</label>
-            <Choice
-              label="Instrument"
-              value={instrument}
-              onChange={(v) => setInstrument(v as Instrument)}
-              options={[
-                { value: 'piano', label: 'Piano' },
-                { value: 'guitar', label: 'Guitar' },
-                { value: 'organ', label: 'Organ' },
-              ]}
-            />
-            <small>
-              {instrument === 'piano'
-                ? 'Soft hammer · decaying strings'
-                : instrument === 'guitar'
-                  ? 'Plucked strings · gentle strum'
-                  : 'Warm drawbars · sustained tone'}
-              <br />
-              Synthesized approximation
-            </small>
-          </div>
-          <div className="field duration">
-            <label>
-              Chord duration <b>{duration.toFixed(1)} s</b>
-            </label>
-            <Slider
-              aria-label="Chord duration"
-              min={0.4}
-              max={5}
-              step={0.1}
-              value={[duration]}
-              onValueChange={(v) => setDuration(Array.isArray(v) ? v[0] : v)}
-            />
-            <small>Plays out after you release the key</small>
-          </div>
-          <div className="field volume">
-            <label>
-              Volume <b>{Math.round(volume * 100)}%</b>
-            </label>
-            <Slider
-              aria-label="Volume"
-              min={0}
-              max={1}
-              step={0.01}
-              value={[volume]}
-              onValueChange={(v) => setVolume(Array.isArray(v) ? v[0] : v)}
-            />
-          </div>
-        </section>
-        <div className="section-heading">
-          <h2>
-            Chord pads <span>10 keys, endless combinations</span>
-          </h2>
-          <span className="keyboard-note">
-            <Keyboard size={16} /> Keyboard ready
-          </span>
-        </div>
-        <section className="pad-grid" aria-label="Chord pads">
-          {pads.map((p, i) => (
-            <div
-              key={i}
-              className={`pad-shell ${selected === i ? 'selected' : ''} ${active.includes(i) ? 'active' : ''}`}
-              style={{ '--pad-color': COLORS[i] } as React.CSSProperties}
-            >
-              <button
-                className="pad"
-                disabled={mode === 'playing' || p.quality === 'off'}
-                onClick={() => triggerRef.current(i)}
-                aria-label={`Play ${chordLabel(p)}, key ${KEYS[i]}`}
-              >
-                <span className="pad-top">
-                  <kbd>{KEYS[i]}</kbd>
-                  <span className="pad-light" />
-                </span>
-                <strong>{chordLabel(p)}</strong>
-                <span className="note-names">
-                  {chordNoteNames(p).join(' · ') || 'No chord assigned'}
-                </span>
-                <span className="pad-lines">
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                  <i />
-                </span>
-              </button>
-              <button
-                className="edit-pad"
-                onClick={() => setSelected(i)}
-                aria-label={`Edit pad ${KEYS[i]}`}
-              >
-                {selected === i ? (
-                  <>
-                    <Check size={12} /> Editing
-                  </>
-                ) : (
-                  'Edit chord'
-                )}
-              </button>
+        <nav className="workspace-tabs" aria-label="Workspace">
+          <button
+            aria-pressed={tab === 'record'}
+            disabled={mode !== 'idle' || exporting}
+            onClick={() => setTab('record')}
+          >
+            Record
+          </button>
+          <button
+            aria-pressed={tab === 'session'}
+            disabled={mode !== 'idle' || exporting}
+            onClick={() => setTab('session')}
+          >
+            Session · {tracks.length}
+          </button>
+        </nav>
+        <div hidden={tab !== 'record'}>
+          <section className="soundbar" aria-label="Instrument settings">
+            <div className="sound-icon">
+              <Music2 />
             </div>
-          ))}
-        </section>
-        <section className="editor" aria-label="Edit selected chord">
-          <div>
-            <span className="edit-key" style={{ color: COLORS[selected] }}>
-              {KEYS[selected]}
+            <div className="field instrument">
+              <label>Instrument</label>
+              <Choice
+                label="Instrument"
+                value={instrument}
+                onChange={(v) => setInstrument(v as Instrument)}
+                options={[
+                  { value: 'piano', label: 'Piano' },
+                  { value: 'guitar', label: 'Guitar' },
+                  { value: 'organ', label: 'Organ' },
+                ]}
+              />
+              <small>
+                {instrument === 'piano'
+                  ? 'Soft hammer · decaying strings'
+                  : instrument === 'guitar'
+                    ? 'Plucked strings · gentle strum'
+                    : 'Warm drawbars · sustained tone'}
+                <br />
+                Synthesized approximation
+              </small>
+            </div>
+            <div className="field duration">
+              <label>
+                Chord duration <b>{duration.toFixed(1)} s</b>
+              </label>
+              <Slider
+                aria-label="Chord duration"
+                min={0.4}
+                max={5}
+                step={0.1}
+                value={[duration]}
+                onValueChange={(v) => setDuration(Array.isArray(v) ? v[0] : v)}
+              />
+              <small>Plays out after you release the key</small>
+            </div>
+            <div className="field volume">
+              <label>
+                Volume <b>{Math.round(volume * 100)}%</b>
+              </label>
+              <Slider
+                aria-label="Volume"
+                min={0}
+                max={1}
+                step={0.01}
+                value={[volume]}
+                onValueChange={(v) => setVolume(Array.isArray(v) ? v[0] : v)}
+              />
+            </div>
+          </section>
+          <div className="section-heading">
+            <h2>
+              Chord pads <span>10 keys, endless combinations</span>
+            </h2>
+            <span className="keyboard-note">
+              <Keyboard size={16} /> Keyboard ready
             </span>
-            <strong>Edit pad {KEYS[selected]}</strong>
           </div>
-          <ChordPicker
-            chord={chosen}
-            prefix="Chord"
-            allowOff
-            onChange={(chord) =>
-              setPads((p) => p.map((x, i) => (i === selected ? chord : x)))
-            }
-          />
-          <p>
-            Choose a family, then an extension. Bass adds the note after the
-            slash. Sus and diminished use no extension.
-          </p>
-        </section>
-        <section className="recorder" aria-label="Performance recorder">
-          <div className="recorder-head">
-            <div>
-              <p className="eyebrow">PERFORMANCE</p>
-              <h2>Your take</h2>
-            </div>
-            <div
-              className={`time-display ${mode === 'recording' ? 'is-recording' : ''}`}
-            >
-              <span>
-                {mode === 'recording'
-                  ? '● REC'
-                  : mode === 'playing'
-                    ? playbackRange.current.loop
-                      ? '↻ LOOP'
-                      : '▶ PLAY'
-                    : 'TAKE'}
-              </span>
-              {fmt(clock)}
-            </div>
-          </div>
-          <section className="layer-panel" aria-label="Recording tracks">
-            <div className="layer-tabs">
-              {currentTracks.map((track, i) => (
-                <button
-                  key={i}
-                  aria-pressed={i === trackIndex}
-                  disabled={mode !== 'idle' || exporting}
-                  onClick={() => switchTrack(i)}
-                >
-                  {track.name} · {track.instrument} {track.loop ? '↻ ' : ''}
-                  <small>
-                    {track.hits.length
-                      ? (track.trim[1] - track.trim[0]).toFixed(1) + ' s'
-                      : 'Empty'}
-                  </small>
-                </button>
-              ))}
-              <button
-                disabled={mode !== 'idle' || exporting}
-                onClick={() => switchTrack(tracks.length, true)}
+          <section className="pad-grid" aria-label="Chord pads">
+            {pads.map((p, i) => (
+              <div
+                key={i}
+                className={`pad-shell ${selected === i ? 'selected' : ''} ${active.includes(i) ? 'active' : ''}`}
+                style={{ '--pad-color': COLORS[i] } as React.CSSProperties}
               >
-                + Add track
-              </button>
+                <button
+                  className="pad"
+                  disabled={mode === 'playing' || p.quality === 'off'}
+                  onClick={() => triggerRef.current(i)}
+                  aria-label={`Play ${chordLabel(p)}, key ${KEYS[i]}`}
+                >
+                  <span className="pad-top">
+                    <kbd>{KEYS[i]}</kbd>
+                    <span className="pad-light" />
+                  </span>
+                  <strong>{chordLabel(p)}</strong>
+                  <span className="note-names">
+                    {chordNoteNames(p).join(' · ') || 'No chord assigned'}
+                  </span>
+                  <span className="pad-lines">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                </button>
+                <button
+                  className="edit-pad"
+                  onClick={() => setSelected(i)}
+                  aria-label={`Edit pad ${KEYS[i]}`}
+                >
+                  {selected === i ? (
+                    <>
+                      <Check size={12} /> Editing
+                    </>
+                  ) : (
+                    'Edit chord'
+                  )}
+                </button>
+              </div>
+            ))}
+          </section>
+          <section className="editor" aria-label="Edit selected chord">
+            <div>
+              <span className="edit-key" style={{ color: COLORS[selected] }}>
+                {KEYS[selected]}
+              </span>
+              <strong>Edit pad {KEYS[selected]}</strong>
             </div>
+            <ChordPicker
+              chord={chosen}
+              prefix="Chord"
+              allowOff
+              onChange={(chord) =>
+                setPads((p) => p.map((x, i) => (i === selected ? chord : x)))
+              }
+            />
             <p>
-              Recording, trimming and chord edits affect the selected track.
-              Trimmed tracks start together from zero.
+              Choose a family, then an extension. Bass adds the note after the
+              slash. Sus and diminished use no extension.
             </p>
-            <div className="track-options">
-              <button
-                className="track-toggle"
-                role="switch"
-                aria-checked={!!tracks[trackIndex].loop}
+          </section>
+          <section className="recorder" aria-label="Performance recorder">
+            <div className="recorder-head">
+              <div>
+                <p className="eyebrow">PERFORMANCE</p>
+                <h2>Your take</h2>
+              </div>
+              <div
+                className={`time-display ${mode === 'recording' ? 'is-recording' : ''}`}
+              >
+                <span>
+                  {mode === 'recording'
+                    ? '● REC'
+                    : mode === 'playing'
+                      ? playbackRange.current.loop
+                        ? '↻ LOOP'
+                        : '▶ PLAY'
+                      : 'TAKE'}
+                </span>
+                {fmt(clock)}
+              </div>
+            </div>
+
+            {countdown !== null && (
+              <div className="count-in" role="status" aria-live="assertive">
+                <span>GET READY</span>
+                <strong key={countdown}>{countdown}</strong>
+                <small>Recording starts after 1 · Stop to cancel</small>
+              </div>
+            )}
+            <div className="timeline">
+              <div className="ruler">
+                {Array.from({ length: 5 }, (_, i) => (
+                  <span key={i}>{((scale * i) / 4).toFixed(1)}s</span>
+                ))}
+              </div>
+              <div className="tracks">
+                {hits.length === 0 ? (
+                  <div className="empty-take">
+                    <AudioLines size={25} />
+                    <p>
+                      {mode === 'recording'
+                        ? 'Listening for your first chord…'
+                        : 'A little space for your next idea.'}
+                      <small>
+                        {mode === 'recording'
+                          ? 'Play a number key or tap a pad.'
+                          : 'Press Record, play freely, then Stop.'}
+                      </small>
+                    </p>
+                  </div>
+                ) : (
+                  hits.map((h, i) => (
+                    <button
+                      key={i}
+                      disabled={mode !== 'idle' || exporting}
+                      onClick={() => selectRecordedHit(i)}
+                      aria-label={`Edit recorded chord ${i + 1}: ${h.label} at ${h.time.toFixed(3)} seconds`}
+                      aria-pressed={editHit === i}
+                      title={`${h.label} at ${h.time.toFixed(3)}s · ${h.duration}s · ${h.instrument}`}
+                      className={`clip ${editHit === i ? 'selected-clip' : ''}`}
+                      style={{
+                        left: `${(h.time / scale) * 100}%`,
+                        width: `${(h.duration / scale) * 100}%`,
+                        top: 8 + (h.pad % 4) * 27,
+                        background: COLORS[h.pad],
+                      }}
+                    >
+                      {h.label}
+                    </button>
+                  ))
+                )}
+                {hits.length > 0 && mode !== 'recording' && (
+                  <>
+                    <div
+                      className="trim-shade"
+                      style={{ left: 0, width: `${(trim[0] / scale) * 100}%` }}
+                    />
+                    <div
+                      className="trim-shade"
+                      style={{ left: `${(trim[1] / scale) * 100}%`, right: 0 }}
+                    />
+                    <div
+                      className="trim-edge"
+                      style={{ left: `${(trim[0] / scale) * 100}%` }}
+                    />
+                    <div
+                      className="trim-edge"
+                      style={{ left: `${(trim[1] / scale) * 100}%` }}
+                    />
+                  </>
+                )}
+                {mode !== 'idle' && (
+                  <div
+                    className="playhead"
+                    style={{
+                      left: `${Math.min(100, ((clock + (mode === 'playing' ? playbackRange.current.offset : 0)) / scale) * 100)}%`,
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+            {hits.length > 0 && mode !== 'recording' && (
+              <section
+                className="recorded-editor"
+                aria-label="Edit recorded chord"
+              >
+                <div className="recorded-editor-heading">
+                  <h3>Correct a chord</h3>
+                  <button
+                    className="undo-edit"
+                    disabled={!undoEdits.length || mode !== 'idle' || exporting}
+                    onClick={undoRecordedEdit}
+                  >
+                    <Undo2 size={15} /> Undo edit
+                  </button>
+                </div>
+                <p>
+                  Click a chord in the timeline, or choose it here. Only that
+                  occurrence changes.
+                </p>
+                <Choice
+                  label="Recorded chord"
+                  value={editHit === null ? 'none' : String(editHit)}
+                  options={[
+                    { value: 'none', label: 'Choose a recorded chord' },
+                    ...hits.map((hit, index) => ({
+                      value: String(index),
+                      label: `${index + 1}. ${hit.label} · ${hit.time.toFixed(3)} s`,
+                    })),
+                  ]}
+                  onChange={(value) => {
+                    if (value === 'none') setEditHit(null);
+                    else selectRecordedHit(Number(value));
+                  }}
+                  disabled={mode !== 'idle' || exporting}
+                />
+                {editHit !== null && hits[editHit] && (
+                  <>
+                    <div className="replacement-fields">
+                      <ChordPicker
+                        chord={replacement}
+                        prefix="Replacement"
+                        onChange={setReplacement}
+                        disabled={mode !== 'idle' || exporting}
+                      />
+                      <button
+                        className="replace-chord"
+                        onClick={applyRecordedEdit}
+                        disabled={
+                          mode !== 'idle' ||
+                          exporting ||
+                          hits[editHit].label === chordLabel(replacement)
+                        }
+                      >
+                        Replace {hits[editHit].label} with{' '}
+                        {chordLabel(replacement)}
+                      </button>
+                    </div>
+                    <small>
+                      {hits[editHit].time.toFixed(3)} s ·{' '}
+                      {hits[editHit].duration.toFixed(1)} s duration ·{' '}
+                      {hits[editHit].instrument} · Timing and sound settings
+                      stay the same
+                    </small>
+                  </>
+                )}
+              </section>
+            )}
+            {hits.length > 0 && mode !== 'recording' && (
+              <section className="trim-panel" aria-label="Trim recording">
+                <div className="trim-heading">
+                  <h3>Trim your take</h3>
+                  <span>
+                    <b>{(trim[1] - trim[0]).toFixed(3)} s</b> selected /{' '}
+                    {length.toFixed(3)} s original
+                  </span>
+                </div>
+                <Slider
+                  className="trim-slider"
+                  aria-label="Selected audio range"
+                  min={0}
+                  max={length}
+                  step={0.001}
+                  minStepsBetweenValues={1}
+                  value={trim}
+                  disabled={mode !== 'idle' || exporting}
+                  onValueChange={(value) => {
+                    if (Array.isArray(value)) {
+                      updateTrim(value[0], value[1]);
+                      setClock(0);
+                      setStatus('Selection updated · original take kept');
+                    }
+                  }}
+                />
+                <div className="trim-fields">
+                  {([0, 1] as const).map((index) => (
+                    <label key={index} htmlFor={`trim-${index}`}>
+                      {index === 0 ? 'Start (seconds)' : 'End (seconds)'}
+                      <Input
+                        id={`trim-${index}`}
+                        type="number"
+                        inputMode="decimal"
+                        step="0.001"
+                        min={index === 0 ? 0 : trim[0] + 0.001}
+                        max={index === 0 ? trim[1] - 0.001 : length}
+                        value={trimDraft[index]}
+                        disabled={mode !== 'idle' || exporting}
+                        onChange={(event) =>
+                          setTrimDraft((draft) =>
+                            index === 0
+                              ? [event.target.value, draft[1]]
+                              : [draft[0], event.target.value],
+                          )
+                        }
+                        onBlur={() => commitTrim(index)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur();
+                        }}
+                      />
+                    </label>
+                  ))}
+                  <button
+                    className="reset-trim"
+                    disabled={!isTrimmed || mode !== 'idle' || exporting}
+                    onClick={() => {
+                      updateTrim(0, length);
+                      setClock(0);
+                      setStatus('Full take restored');
+                    }}
+                  >
+                    Reset to full take
+                  </button>
+                </div>
+                <p>
+                  Drag either handle or enter exact times. Replay and download
+                  use this range. Your original stays intact.
+                </p>
+              </section>
+            )}
+            <div className="save-take">
+              <Input
+                aria-label="Take name"
+                placeholder="Name your take"
+                value={takeName}
+                onChange={(e) => setTakeName(e.target.value)}
                 disabled={mode !== 'idle' || exporting}
-                onClick={() =>
-                  setTracks(
-                    currentTracks.map((track, i) =>
-                      i === trackIndex
-                        ? { ...track, loop: !track.loop }
-                        : track,
-                    ),
-                  )
+              />
+              <button
+                onClick={saveTake}
+                disabled={
+                  !hits.length ||
+                  !takeName.trim() ||
+                  mode !== 'idle' ||
+                  exporting ||
+                  !storageReady
                 }
               >
-                <span className="toggle-light" aria-hidden="true" />
-                <span>
-                  <strong>Loop this track</strong>
-                  <small>Repeat until the longest track ends</small>
-                </span>
-              </button>
-              <button
-                className="track-toggle"
-                role="switch"
-                aria-checked={monitor}
-                disabled={mode !== 'idle' || exporting}
-                onClick={() => setMonitor(!monitor)}
-              >
-                <span className="toggle-light" aria-hidden="true" />
-                <span>
-                  <strong>Play along</strong>
-                  <small>Hear other tracks while recording</small>
-                </span>
+                Save to Session
               </button>
             </div>
+            <div className="transport">
+              <div className="transport-buttons">
+                <button
+                  className="record-button"
+                  disabled={mode !== 'idle' || exporting}
+                  onClick={record}
+                >
+                  <Circle size={15} fill="currentColor" />
+                  {hits.length ? 'Re-record take' : 'Record take'}
+                </button>
+                <button disabled={mode === 'idle'} onClick={stop}>
+                  <Square size={15} fill="currentColor" />
+                  Stop
+                </button>
+                <button
+                  disabled={!hits.length || mode !== 'idle' || exporting}
+                  onClick={() => replay(false)}
+                >
+                  <Play size={15} fill="currentColor" />
+                  Replay this track
+                </button>
+                <button
+                  disabled={!hits.length || mode !== 'idle' || exporting}
+                  onClick={() => replay(true)}
+                  aria-label="Loop selected range"
+                >
+                  <Repeat2 size={16} />
+                  Loop
+                </button>
+              </div>
+              <button
+                className="download"
+                disabled={!hits.length || mode !== 'idle' || exporting}
+                onClick={() => download()}
+              >
+                <Download size={17} />
+                {exporting
+                  ? 'Preparing…'
+                  : isTrimmed
+                    ? 'Download trimmed WAV'
+                    : 'Download WAV'}
+              </button>
+            </div>
+            <div className="take-meta">
+              <span role="status">{status}</span>
+              <span>
+                {hits.length} chord{hits.length === 1 ? '' : 's'} ·{' '}
+                {length.toFixed(2)} s{' '}
+                <span className="desktop-only">· No quantization</span>
+              </span>
+            </div>
+          </section>
+        </div>
+        {tab === 'session' && (
+          <section className="recorder session-panel" aria-label="Session">
+            <h2>Session</h2>
+            <label>
+              Session length (seconds)
+              <Input
+                aria-label="Session length in seconds"
+                type="number"
+                min={Math.max(10, longestSelected)}
+                max={1800}
+                step={1}
+                value={mixLength}
+                disabled={mode !== 'idle' || exporting}
+                onChange={(e) => {
+                  const value = Number(e.target.value);
+                  if (Number.isFinite(value))
+                    setSessionLength(
+                      Math.min(1800, Math.max(10, longestSelected, value)),
+                    );
+                }}
+              />
+            </label>
+            <p>
+              Select saved takes to play together. Each take starts at its
+              trimmed beginning.
+            </p>
+            {!tracks.length && (
+              <p>
+                No saved takes yet. Record a take, give it a name, and save it
+                here.
+              </p>
+            )}
+            {tracks.map((track, i) => (
+              <div className="saved-take" key={i}>
+                <button
+                  className="track-toggle"
+                  role="switch"
+                  aria-label={'Include ' + track.name}
+                  aria-checked={selectedTakes.includes(i)}
+                  disabled={mode !== 'idle' || exporting}
+                  onClick={() =>
+                    setSelectedTakes(
+                      selectedTakes.includes(i)
+                        ? selectedTakes.filter((n) => n !== i)
+                        : [...selectedTakes, i],
+                    )
+                  }
+                >
+                  <span className="toggle-light" />
+                  <strong>{track.name}</strong>
+                </button>
+                <span>
+                  {track.instrument} ·{' '}
+                  {(track.trim[1] - track.trim[0]).toFixed(2)} s
+                </span>
+                <label className="take-position">
+                  Start (seconds)
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1800}
+                    step={0.1}
+                    aria-label={'Start time for ' + track.name}
+                    value={track.offset ?? 0}
+                    disabled={mode !== 'idle' || exporting}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      if (Number.isFinite(value))
+                        persistTracks(
+                          tracks.map((t, n) =>
+                            n === i
+                              ? {
+                                  ...t,
+                                  offset: Math.max(0, Math.min(1800, value)),
+                                }
+                              : t,
+                          ),
+                        );
+                    }}
+                  />
+                </label>
+                <div className="take-lane">
+                  <div
+                    className="take-bar"
+                    style={{
+                      left: ((track.offset ?? 0) / mixLength) * 100 + '%',
+                      width:
+                        Math.min(
+                          100,
+                          ((track.trim[1] - track.trim[0]) / mixLength) * 100,
+                        ) + '%',
+                    }}
+                  >
+                    {track.name}
+                  </div>
+                  <input
+                    type="range"
+                    aria-label={'Move ' + track.name}
+                    min={0}
+                    max={mixLength}
+                    step={0.1}
+                    value={track.offset ?? 0}
+                    disabled={mode !== 'idle' || exporting}
+                    onChange={(e) =>
+                      persistTracks(
+                        tracks.map((t, n) =>
+                          n === i
+                            ? { ...t, offset: Number(e.target.value) }
+                            : t,
+                        ),
+                      )
+                    }
+                  />
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={!!track.loop}
+                  aria-label={'Loop ' + track.name}
+                  disabled={mode !== 'idle' || exporting}
+                  onClick={() =>
+                    persistTracks(
+                      tracks.map((t, n) =>
+                        n === i ? { ...t, loop: !t.loop } : t,
+                      ),
+                    )
+                  }
+                >
+                  {track.loop ? 'Loop on' : 'Loop off'}
+                </button>
+                <button
+                  disabled={mode !== 'idle' || exporting}
+                  onClick={() => replay(false, true, track)}
+                >
+                  Listen
+                </button>
+              </div>
+            ))}
             <div className="layer-actions">
               <button
                 disabled={!hasMix || mode !== 'idle' || exporting}
                 onClick={() => replay(false, true)}
               >
-                Play all tracks
+                Play selected
               </button>
               <button
                 disabled={!hasMix || mode !== 'idle' || exporting}
                 onClick={() => replay(true, true)}
               >
-                Loop all tracks
+                Loop session
+              </button>
+              <button disabled={mode === 'idle'} onClick={stop}>
+                Stop
               </button>
               <button
                 disabled={!hasMix || mode !== 'idle' || exporting}
@@ -998,280 +1417,19 @@ export default function Home() {
                 Download mix
               </button>
             </div>
+            <p role="status">
+              {status} · {fmt(clock)}
+            </p>
+            <small>
+              Looped takes repeat until the session ends. Saved takes stay in
+              this browser; downloads provide a separate backup.
+            </small>
           </section>
-          {countdown !== null && (
-            <div className="count-in" role="status" aria-live="assertive">
-              <span>GET READY</span>
-              <strong key={countdown}>{countdown}</strong>
-              <small>Recording starts after 1 · Stop to cancel</small>
-            </div>
-          )}
-          <div className="timeline">
-            <div className="ruler">
-              {Array.from({ length: 5 }, (_, i) => (
-                <span key={i}>{((scale * i) / 4).toFixed(1)}s</span>
-              ))}
-            </div>
-            <div className="tracks">
-              {hits.length === 0 ? (
-                <div className="empty-take">
-                  <AudioLines size={25} />
-                  <p>
-                    {mode === 'recording'
-                      ? 'Listening for your first chord…'
-                      : 'A little space for your next idea.'}
-                    <small>
-                      {mode === 'recording'
-                        ? 'Play a number key or tap a pad.'
-                        : 'Press Record, play freely, then Stop.'}
-                    </small>
-                  </p>
-                </div>
-              ) : (
-                hits.map((h, i) => (
-                  <button
-                    key={i}
-                    disabled={mode !== 'idle' || exporting}
-                    onClick={() => selectRecordedHit(i)}
-                    aria-label={`Edit recorded chord ${i + 1}: ${h.label} at ${h.time.toFixed(3)} seconds`}
-                    aria-pressed={editHit === i}
-                    title={`${h.label} at ${h.time.toFixed(3)}s · ${h.duration}s · ${h.instrument}`}
-                    className={`clip ${editHit === i ? 'selected-clip' : ''}`}
-                    style={{
-                      left: `${(h.time / scale) * 100}%`,
-                      width: `${(h.duration / scale) * 100}%`,
-                      top: 8 + (h.pad % 4) * 27,
-                      background: COLORS[h.pad],
-                    }}
-                  >
-                    {h.label}
-                  </button>
-                ))
-              )}
-              {hits.length > 0 && mode !== 'recording' && (
-                <>
-                  <div
-                    className="trim-shade"
-                    style={{ left: 0, width: `${(trim[0] / scale) * 100}%` }}
-                  />
-                  <div
-                    className="trim-shade"
-                    style={{ left: `${(trim[1] / scale) * 100}%`, right: 0 }}
-                  />
-                  <div
-                    className="trim-edge"
-                    style={{ left: `${(trim[0] / scale) * 100}%` }}
-                  />
-                  <div
-                    className="trim-edge"
-                    style={{ left: `${(trim[1] / scale) * 100}%` }}
-                  />
-                </>
-              )}
-              {mode !== 'idle' && (
-                <div
-                  className="playhead"
-                  style={{
-                    left: `${Math.min(100, ((clock + (mode === 'playing' ? playbackRange.current.offset : 0)) / scale) * 100)}%`,
-                  }}
-                />
-              )}
-            </div>
-          </div>
-          {hits.length > 0 && mode !== 'recording' && (
-            <section
-              className="recorded-editor"
-              aria-label="Edit recorded chord"
-            >
-              <div className="recorded-editor-heading">
-                <h3>Correct a chord</h3>
-                <button
-                  className="undo-edit"
-                  disabled={!undoEdits.length || mode !== 'idle' || exporting}
-                  onClick={undoRecordedEdit}
-                >
-                  <Undo2 size={15} /> Undo edit
-                </button>
-              </div>
-              <p>
-                Click a chord in the timeline, or choose it here. Only that
-                occurrence changes.
-              </p>
-              <Choice
-                label="Recorded chord"
-                value={editHit === null ? 'none' : String(editHit)}
-                options={[
-                  { value: 'none', label: 'Choose a recorded chord' },
-                  ...hits.map((hit, index) => ({
-                    value: String(index),
-                    label: `${index + 1}. ${hit.label} · ${hit.time.toFixed(3)} s`,
-                  })),
-                ]}
-                onChange={(value) => {
-                  if (value === 'none') setEditHit(null);
-                  else selectRecordedHit(Number(value));
-                }}
-                disabled={mode !== 'idle' || exporting}
-              />
-              {editHit !== null && hits[editHit] && (
-                <>
-                  <div className="replacement-fields">
-                    <ChordPicker
-                      chord={replacement}
-                      prefix="Replacement"
-                      onChange={setReplacement}
-                      disabled={mode !== 'idle' || exporting}
-                    />
-                    <button
-                      className="replace-chord"
-                      onClick={applyRecordedEdit}
-                      disabled={
-                        mode !== 'idle' ||
-                        exporting ||
-                        hits[editHit].label === chordLabel(replacement)
-                      }
-                    >
-                      Replace {hits[editHit].label} with{' '}
-                      {chordLabel(replacement)}
-                    </button>
-                  </div>
-                  <small>
-                    {hits[editHit].time.toFixed(3)} s ·{' '}
-                    {hits[editHit].duration.toFixed(1)} s duration ·{' '}
-                    {hits[editHit].instrument} · Timing and sound settings stay
-                    the same
-                  </small>
-                </>
-              )}
-            </section>
-          )}
-          {hits.length > 0 && mode !== 'recording' && (
-            <section className="trim-panel" aria-label="Trim recording">
-              <div className="trim-heading">
-                <h3>Trim your take</h3>
-                <span>
-                  <b>{(trim[1] - trim[0]).toFixed(3)} s</b> selected /{' '}
-                  {length.toFixed(3)} s original
-                </span>
-              </div>
-              <Slider
-                className="trim-slider"
-                aria-label="Selected audio range"
-                min={0}
-                max={length}
-                step={0.001}
-                minStepsBetweenValues={1}
-                value={trim}
-                disabled={mode !== 'idle' || exporting}
-                onValueChange={(value) => {
-                  if (Array.isArray(value)) {
-                    updateTrim(value[0], value[1]);
-                    setClock(0);
-                    setStatus('Selection updated · original take kept');
-                  }
-                }}
-              />
-              <div className="trim-fields">
-                {([0, 1] as const).map((index) => (
-                  <label key={index} htmlFor={`trim-${index}`}>
-                    {index === 0 ? 'Start (seconds)' : 'End (seconds)'}
-                    <Input
-                      id={`trim-${index}`}
-                      type="number"
-                      inputMode="decimal"
-                      step="0.001"
-                      min={index === 0 ? 0 : trim[0] + 0.001}
-                      max={index === 0 ? trim[1] - 0.001 : length}
-                      value={trimDraft[index]}
-                      disabled={mode !== 'idle' || exporting}
-                      onChange={(event) =>
-                        setTrimDraft((draft) =>
-                          index === 0
-                            ? [event.target.value, draft[1]]
-                            : [draft[0], event.target.value],
-                        )
-                      }
-                      onBlur={() => commitTrim(index)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') event.currentTarget.blur();
-                      }}
-                    />
-                  </label>
-                ))}
-                <button
-                  className="reset-trim"
-                  disabled={!isTrimmed || mode !== 'idle' || exporting}
-                  onClick={() => {
-                    updateTrim(0, length);
-                    setClock(0);
-                    setStatus('Full take restored');
-                  }}
-                >
-                  Reset to full take
-                </button>
-              </div>
-              <p>
-                Drag either handle or enter exact times. Replay and download use
-                this range. Your original stays intact.
-              </p>
-            </section>
-          )}
-          <div className="transport">
-            <div className="transport-buttons">
-              <button
-                className="record-button"
-                disabled={mode !== 'idle' || exporting}
-                onClick={record}
-              >
-                <Circle size={15} fill="currentColor" />
-                {hits.length ? 'Re-record this track' : 'Record this track'}
-              </button>
-              <button disabled={mode === 'idle'} onClick={stop}>
-                <Square size={15} fill="currentColor" />
-                Stop
-              </button>
-              <button
-                disabled={!hits.length || mode !== 'idle' || exporting}
-                onClick={() => replay(false)}
-              >
-                <Play size={15} fill="currentColor" />
-                Replay this track
-              </button>
-              <button
-                disabled={!hits.length || mode !== 'idle' || exporting}
-                onClick={() => replay(true)}
-                aria-label="Loop selected range"
-              >
-                <Repeat2 size={16} />
-                Loop
-              </button>
-            </div>
-            <button
-              className="download"
-              disabled={!hits.length || mode !== 'idle' || exporting}
-              onClick={() => download()}
-            >
-              <Download size={17} />
-              {exporting
-                ? 'Preparing…'
-                : isTrimmed
-                  ? 'Download trimmed WAV'
-                  : 'Download WAV'}
-            </button>
-          </div>
-          <div className="take-meta">
-            <span role="status">{status}</span>
-            <span>
-              {hits.length} chord{hits.length === 1 ? '' : 's'} ·{' '}
-              {length.toFixed(2)} s{' '}
-              <span className="desktop-only">· No quantization</span>
-            </span>
-          </div>
-        </section>
+        )}
         <footer>
           <span>Make a progression. Make it yours.</span>
           <span>
-            Audio stays in this tab · 3-minute takes · Download before closing
+            Save takes to Session · 3-minute takes · Download for backup
           </span>
         </footer>
       </div>

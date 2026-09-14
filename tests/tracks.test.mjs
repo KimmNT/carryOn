@@ -46,3 +46,21 @@ assert.equal(
   0,
 );
 assert.deepEqual([a, b], original);
+assert.equal(mixTracks([a], rate, 10).length, 10 * rate);
+assert.deepEqual(mixTracks([a], rate, 10).slice(0, solo.length), solo);
+assert.ok(
+  mixTracks([a], rate, 10)
+    .slice(solo.length)
+    .every((x) => x === 0),
+);
+const extended = mixTracks([{ ...a, loop: true }], rate, 2);
+assert.equal(extended.length, 2 * rate);
+for (let i = 0; i < extended.length; i++)
+  assert.equal(extended[i], solo[i % solo.length]);
+assert.equal(mixTracks([b], rate, 0.1).length, other.length);
+const delayed=mixTracks([{...a,offset:1}],rate,2);
+assert.ok(delayed.slice(0,rate).every(x=>x===0));
+assert.deepEqual(delayed.slice(rate,rate+solo.length),solo);
+const delayedLoop=mixTracks([{...a,offset:1,loop:true}],rate,2);
+for(let i=rate;i<delayedLoop.length;i++)assert.equal(delayedLoop[i],solo[(i-rate)%solo.length]);
+assert.equal(mixTracks([{...b,offset:30}],rate,10).length,30*rate+other.length);

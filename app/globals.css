@@ -1074,3 +1074,91 @@ footer > span:first-child {
 .count-in > small {
   color: #b7c6ae;
 }
+
+.workspace-tabs {
+  display: flex;
+  gap: 10px;
+  margin: 20px 0;
+}
+.workspace-tabs button,
+.save-take button,
+.session-panel button {
+  padding: 10px 16px;
+  border: 1px solid #424c50;
+  background: #252c2f;
+  color: #e5eded;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.workspace-tabs button[aria-pressed='true'],
+.session-panel button[aria-checked='true'] {
+  border-color: #b9fa73;
+  color: #b9fa73;
+  background: #293523;
+}
+.save-take {
+  display: flex;
+  gap: 10px;
+  margin: 18px 0;
+}
+.save-take input {
+  max-width: 350px;
+}
+.saved-take {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 0;
+  border-bottom: 1px solid #354045;
+}
+.saved-take .track-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+}
+.session-panel p,
+.session-panel small,
+.saved-take > span {
+  color: #aab9bf;
+}
+.session-panel button:disabled,
+.workspace-tabs button:disabled,
+.save-take button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.take-position {
+  width: 135px;
+  font-size: 12px;
+  color: #aab9bf;
+}
+.take-lane {
+  position: relative;
+  flex-basis: 100%;
+  height: 48px;
+  background: #171e21;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.take-bar {
+  position: absolute;
+  top: 0;
+  height: 25px;
+  padding: 3px 6px;
+  background: #456833;
+  color: #d0f9af;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 12px;
+}
+.take-lane input {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  accent-color: #b9fa73;
+  height: 18px;
+}
