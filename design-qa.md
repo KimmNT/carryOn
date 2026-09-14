@@ -15,7 +15,7 @@ The reference is a compressed Logic-style arrangement view, while CarryOn has it
 
 The implementation matches the reference's main arrangement structure: a sticky track list on the left, one horizontal lane per take, a shared time ruler, aligned grid lines, color-coded clip blocks, and a dense dark editing surface. The Record and Session navigation and CarryOn toolbar remain intentionally consistent with the existing product.
 
-The first capture showed two P2 fidelity issues: the timeline ended before the right edge of the panel, and the clips were visually too quiet. The timeline minimum width was increased from 720 to 960 pixels, and clip fills now use solid track colors. The second capture showed a full-width arrangement with distinct clips and an internal horizontal scrollbar for longer Sessions.
+The first capture showed two P2 fidelity issues: the timeline ended before the right edge of the panel, and the clips were visually too quiet. The timeline minimum width was increased from 720 to 960 pixels. Each clip now uses a tinted version of its persistent track color, with its title rendered in the exact track color. The second capture showed a full-width arrangement with distinct clips and an internal horizontal scrollbar for longer Sessions.
 
 ## Focused interaction evidence
 
@@ -29,7 +29,7 @@ The first capture showed two P2 fidelity issues: the timeline ended before the r
 
 - Typography: compact labels and restrained hierarchy match the dense reference while using CarryOn's existing type system.
 - Layout and spacing: the sticky control column, shared ruler, aligned lanes, and horizontally draggable clips reproduce the key DAW layout.
-- Color: the dark grid and bright, distinct clip colors match the reference's contrast pattern without changing the CarryOn palette.
+- Color: the dark grid, tinted clips, and matching track-title colors preserve the reference's recognition pattern without changing the CarryOn palette.
 - Image assets: no imported assets are needed for this functional arrangement interface; controls use the existing icon system.
 - Copy: Session, Solo, Mute, Listen, and Loop labels follow the product's current language.
 

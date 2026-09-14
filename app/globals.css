@@ -1320,7 +1320,7 @@ footer > span:first-child {
   background: #2d373b;
   pointer-events: none;
 }
-.arrangement-clip {
+.session-panel .arrangement-clip {
   --track-color: #b9fa73;
   position: absolute;
   top: 10px;
@@ -1332,25 +1332,25 @@ footer > span:first-child {
   min-width: 20px;
   padding: 7px 10px;
   overflow: hidden;
-  border: 1px solid var(--track-color);
+  border: 1px solid color-mix(in srgb, var(--track-color) 62%, #3d484c);
   border-radius: 5px;
-  background: var(--track-color);
-  color: #111719;
+  background: color-mix(in srgb, var(--track-color) 14%, #20282b);
+  color: #dce5e8;
   cursor: grab;
   touch-action: none;
   user-select: none;
 }
-.arrangement-clip:hover,
-.arrangement-clip:focus-visible,
-.arrangement-clip.is-dragging {
+.session-panel .arrangement-clip:hover,
+.session-panel .arrangement-clip:focus-visible,
+.session-panel .arrangement-clip.is-dragging {
   z-index: 3;
   outline: 2px solid var(--track-color);
   outline-offset: 2px;
 }
-.arrangement-clip.is-dragging {
+.session-panel .arrangement-clip.is-dragging {
   cursor: grabbing;
 }
-.arrangement-clip.is-muted {
+.session-panel .arrangement-clip.is-muted {
   opacity: 0.35;
 }
 .arrangement-clip span,
@@ -1361,12 +1361,13 @@ footer > span:first-child {
   white-space: nowrap;
 }
 .arrangement-clip span {
+  color: var(--track-color);
   font-size: 12px;
   font-weight: 700;
 }
 .arrangement-clip small {
   margin-top: 3px;
-  color: #26302b;
+  color: #93a1a6;
   font-size: 10px;
 }
 .session-empty {
