@@ -17,6 +17,7 @@ import {
   AudioLines,
   Check,
   Undo2,
+  Trash2,
 } from 'lucide-react';
 import {
   Select,
@@ -318,6 +319,13 @@ export default function Home() {
         trackIndex === index ? { ...track, ...change } : track,
       ),
     );
+  }
+  function removeTrack(index: number) {
+    const track = tracks[index];
+    if (!track) return;
+    if (persistTracks(tracks.filter((_, trackIndex) => trackIndex !== index))) {
+      setStatus(`${track.name} removed from Session`);
+    }
   }
   function startTrackDrag(
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -1543,6 +1551,15 @@ export default function Home() {
                             }
                           >
                             <Repeat2 size={13} />
+                          </button>
+                          <button
+                            className="track-remove"
+                            aria-label={'Remove ' + track.name}
+                            title="Remove from Session"
+                            disabled={disabled}
+                            onClick={() => removeTrack(index)}
+                          >
+                            <Trash2 size={13} />
                           </button>
                         </div>
                       </div>

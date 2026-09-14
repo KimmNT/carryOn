@@ -1297,6 +1297,14 @@ footer > span:first-child {
   background: #493b20;
   color: #ffda82;
 }
+.track-controls .track-remove {
+  margin-left: auto;
+}
+.track-controls .track-remove:hover:not(:disabled) {
+  border-color: #d46767;
+  background: #4a2729;
+  color: #ffaaaa;
+}
 .arrangement-lane {
   position: relative;
   overflow: hidden;
