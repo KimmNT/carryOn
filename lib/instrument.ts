@@ -104,6 +104,105 @@ export const DEFAULT_PADS: Pad[] = [
   { root: 5, quality: 'maj7' },
   { root: 7, quality: '7' },
 ];
+export const NOTE_KEY_CODES = [
+  'KeyZ',
+  'KeyS',
+  'KeyX',
+  'KeyD',
+  'KeyC',
+  'KeyV',
+  'KeyG',
+  'KeyB',
+  'KeyH',
+  'KeyN',
+  'KeyJ',
+  'KeyM',
+  'KeyQ',
+  'Digit2',
+  'KeyW',
+  'Digit3',
+  'KeyE',
+  'KeyR',
+  'Digit5',
+  'KeyT',
+  'Digit6',
+  'KeyY',
+  'Digit7',
+  'KeyU',
+  'KeyI',
+] as const;
+export const NOTE_KEY_LABELS = [
+  'Z',
+  'S',
+  'X',
+  'D',
+  'C',
+  'V',
+  'G',
+  'B',
+  'H',
+  'N',
+  'J',
+  'M',
+  'Q',
+  '2',
+  'W',
+  '3',
+  'E',
+  'R',
+  '5',
+  'T',
+  '6',
+  'Y',
+  '7',
+  'U',
+  'I',
+] as const;
+export function midiNoteAt(index: number, baseOctave: number) {
+  if (!Number.isInteger(index) || index < 0 || index >= NOTE_KEY_CODES.length)
+    throw new RangeError('Choose one of the 25 note keys.');
+  if (!Number.isInteger(baseOctave) || baseOctave < 0 || baseOctave > 7)
+    throw new RangeError('Choose a valid base octave.');
+  return (baseOctave + 1) * 12 + index;
+}
+export function noteLabel(midi: number) {
+  if (!Number.isInteger(midi) || midi < 0 || midi > 127)
+    throw new RangeError('Choose a valid MIDI note.');
+  const names = [
+    'C',
+    'C♯',
+    'D',
+    'D♯',
+    'E',
+    'F',
+    'F♯',
+    'G',
+    'G♯',
+    'A',
+    'A♯',
+    'B',
+  ];
+  return names[midi % 12] + (Math.floor(midi / 12) - 1);
+}
+export function createNoteKeyGate() {
+  const held = new Set<string>();
+  return {
+    down(code: string, repeat: boolean) {
+      const index = NOTE_KEY_CODES.indexOf(
+        code as (typeof NOTE_KEY_CODES)[number],
+      );
+      if (repeat || held.has(code) || index < 0) return -1;
+      held.add(code);
+      return index;
+    },
+    up(code: string) {
+      held.delete(code);
+    },
+    clear() {
+      held.clear();
+    },
+  };
+}
 export function chordLabel(p: Pad) {
   return p.quality === 'off'
     ? '—'

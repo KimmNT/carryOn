@@ -18,6 +18,8 @@ import {
   Check,
   Undo2,
   Trash2,
+  Minus,
+  Plus,
 } from 'lucide-react';
 import {
   Select,
@@ -49,6 +51,10 @@ import {
   renderTake,
   encodeWav,
   clampTrackStart,
+  createNoteKeyGate,
+  midiNoteAt,
+  noteLabel,
+  NOTE_KEY_LABELS,
   type Hit,
   type Pad,
   type Instrument,
@@ -89,6 +95,17 @@ const COLORS = [
   '#ffd578',
 ];
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+const NOTE_KEYS = (() => {
+  const blackPitches = new Set([1, 3, 6, 8, 10]);
+  let whiteIndex = 0;
+  return NOTE_KEY_LABELS.map((shortcut, index) => {
+    const isBlack = blackPitches.has(index % 12);
+    const key = { index, shortcut, isBlack, whiteIndex };
+    if (!isBlack) whiteIndex++;
+    return key;
+  });
+})();
+const NOTE_WHITE_COUNT = NOTE_KEYS.filter((key) => !key.isBlack).length;
 function Choice({
   label,
   value,
@@ -223,6 +240,8 @@ const rulerTime = (t: number) =>
     : `${Math.round(t)}s`;
 export default function Home() {
   const [pads, setPads] = useState<Pad[]>(DEFAULT_PADS),
+    [playMode, setPlayMode] = useState<'chords' | 'notes'>('chords'),
+    [baseOctave, setBaseOctave] = useState(3),
     [instrument, setInstrument] = useState<Instrument>('piano'),
     [duration, setDuration] = useState(2.4),
     [volume, setVolume] = useState(0.7),
@@ -294,15 +313,14 @@ export default function Home() {
               Array.isArray(t.trim) &&
               Number.isFinite(t.length),
           )
-        )
-          {
-            const normalized = parsed.map((track, index) => ({
-              ...track,
-              color: track.color ?? COLORS[index % COLORS.length],
-            }));
-            setTracks(normalized);
-            localStorage.setItem('carryon-takes-v1', JSON.stringify(normalized));
-          }
+        ) {
+          const normalized = parsed.map((track, index) => ({
+            ...track,
+            color: track.color ?? COLORS[index % COLORS.length],
+          }));
+          setTracks(normalized);
+          localStorage.setItem('carryon-takes-v1', JSON.stringify(normalized));
+        }
       }
     } catch {
       setStatus('Saved takes could not be loaded in this browser.');
@@ -467,11 +485,14 @@ export default function Home() {
     recorded = useRef<Hit[]>([]),
     endTime = useRef(0),
     modeRef = useRef(mode),
-    settings = useRef({ pads, instrument, duration, volume }),
+    playModeRef = useRef(playMode),
+    settings = useRef({ pads, instrument, duration, volume, baseOctave }),
     triggerRef = useRef<(i: number) => void>(() => {}),
+    noteTriggerRef = useRef<(i: number) => void>(() => {}),
     stopRef = useRef(() => {});
-  settings.current = { pads, instrument, duration, volume };
+  settings.current = { pads, instrument, duration, volume, baseOctave };
   modeRef.current = mode;
+  playModeRef.current = playMode;
   async function unlock() {
     if (!audio.current || audio.current.state === 'closed')
       audio.current = new AudioContext();
@@ -561,6 +582,43 @@ export default function Home() {
   }
   triggerRef.current = (i) => {
     void trigger(i);
+  };
+  async function triggerNote(i: number) {
+    if (modeRef.current === 'playing' || modeRef.current === 'countin') return;
+    const s = settings.current;
+    const midi = midiNoteAt(i, s.baseOctave);
+    const snapshot: Hit = {
+      pad: i,
+      time: 0,
+      notes: [midi],
+      label: noteLabel(midi),
+      instrument: s.instrument,
+      duration: s.duration,
+      volume: s.volume,
+    };
+    try {
+      const ctx = await unlock();
+      if ((modeRef.current as string) === 'playing') return;
+      const buffer = prepareHit(ctx, snapshot);
+      const when = ctx.currentTime + 0.012;
+      snapshot.time = recording.current ? Math.max(0, when - start.current) : 0;
+      playBuffer(ctx, buffer, when);
+      if (recording.current) {
+        recorded.current.push(snapshot);
+        setHits([...recorded.current]);
+      }
+      setActive((current) => [...new Set([...current, i])]);
+      setTimeout(
+        () => setActive((current) => current.filter((key) => key !== i)),
+        180,
+      );
+      setStatus(`${snapshot.label} · ${s.instrument}`);
+    } catch {
+      setStatus('Audio could not start. Try playing the note again.');
+    }
+  }
+  noteTriggerRef.current = (i) => {
+    void triggerNote(i);
   };
   function stop() {
     countInToken.current++;
@@ -708,7 +766,13 @@ export default function Home() {
     }
   }
   function selectRecordedHit(index: number) {
-    if (modeRef.current !== 'idle' || exporting || !hits[index]) return;
+    if (
+      modeRef.current !== 'idle' ||
+      exporting ||
+      !hits[index] ||
+      !hits[index].chord
+    )
+      return;
     setEditHit(index);
     setReplacement(recordedChord(hits[index]));
   }
@@ -771,7 +835,8 @@ export default function Home() {
     }
   }
   useEffect(() => {
-    const gate = createKeyGate();
+    const chordGate = createKeyGate();
+    const noteGate = createNoteKeyGate();
     const down = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement;
@@ -781,14 +846,24 @@ export default function Home() {
         )
       )
         return;
-      const i = gate.down(e.code, e.repeat);
+      const notesMode = playModeRef.current === 'notes';
+      const i = notesMode
+        ? noteGate.down(e.code, e.repeat)
+        : chordGate.down(e.code, e.repeat);
       if (i >= 0) {
         e.preventDefault();
-        triggerRef.current(i);
+        if (notesMode) noteTriggerRef.current(i);
+        else triggerRef.current(i);
       }
     };
-    const up = (e: KeyboardEvent) => gate.up(e.code);
-    const blur = () => gate.clear();
+    const up = (e: KeyboardEvent) => {
+      chordGate.up(e.code);
+      noteGate.up(e.code);
+    };
+    const blur = () => {
+      chordGate.clear();
+      noteGate.clear();
+    };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     window.addEventListener('blur', blur);
@@ -918,7 +993,13 @@ export default function Home() {
     return () => lifecycle.abort();
   }, []);
   const scale = mode === 'recording' ? Math.max(8, clock + 2) : length || 8,
-    chosen = pads[selected];
+    chosen = pads[selected],
+    recordedKind =
+      hits.length && hits.some((hit) => !hit.chord)
+        ? 'note'
+        : playMode === 'notes'
+          ? 'note'
+          : 'chord';
   const timelineWidth = Math.max(960, Math.min(18000, mixLength * 22));
   const timelineTicks = Array.from({ length: 11 }, (_, index) => {
     const seconds = (mixLength * index) / 10;
@@ -944,8 +1025,17 @@ export default function Home() {
             <p className="eyebrow">YOUR HANDS. YOUR TIMING.</p>
             <h1>Find your progression.</h1>
             <p className="intro">
-              Press <kbd>1</kbd> through <kbd>0</kbd> or tap a pad. Every press
-              plays one complete chord.
+              {playMode === 'chords' ? (
+                <>
+                  Press <kbd>1</kbd> through <kbd>0</kbd> or tap a pad. Every
+                  press plays one complete chord.
+                </>
+              ) : (
+                <>
+                  Play the 25-key controller on screen or from your computer
+                  keyboard.
+                </>
+              )}
             </p>
           </div>
           <span className="session-label">
@@ -997,10 +1087,11 @@ export default function Home() {
             </div>
             <div className="field duration">
               <label>
-                Chord duration <b>{duration.toFixed(1)} s</b>
+                {playMode === 'chords' ? 'Chord' : 'Note'} duration{' '}
+                <b>{duration.toFixed(1)} s</b>
               </label>
               <Slider
-                aria-label="Chord duration"
+                aria-label={`${playMode === 'chords' ? 'Chord' : 'Note'} duration`}
                 min={0.4}
                 max={5}
                 step={0.1}
@@ -1023,79 +1114,199 @@ export default function Home() {
               />
             </div>
           </section>
-          <div className="section-heading">
-            <h2>
-              Chord pads <span>10 keys, endless combinations</span>
-            </h2>
+          <div className="play-mode-bar">
+            <div>
+              <span>Play mode</span>
+              <fieldset className="play-mode-switch" aria-label="Play mode">
+                <button
+                  aria-pressed={playMode === 'chords'}
+                  disabled={mode !== 'idle'}
+                  onClick={() => setPlayMode('chords')}
+                >
+                  Chords
+                </button>
+                <button
+                  aria-pressed={playMode === 'notes'}
+                  disabled={mode !== 'idle'}
+                  onClick={() => setPlayMode('notes')}
+                >
+                  Notes
+                </button>
+              </fieldset>
+            </div>
             <span className="keyboard-note">
-              <Keyboard size={16} /> Keyboard ready
+              <Keyboard size={16} /> Computer keyboard ready
             </span>
           </div>
-          <section className="pad-grid" aria-label="Chord pads">
-            {pads.map((p, i) => (
-              <div
-                key={i}
-                className={`pad-shell ${selected === i ? 'selected' : ''} ${active.includes(i) ? 'active' : ''}`}
-                style={{ '--pad-color': COLORS[i] } as React.CSSProperties}
-              >
-                <button
-                  className="pad"
-                  disabled={mode === 'playing' || p.quality === 'off'}
-                  onClick={() => triggerRef.current(i)}
-                  aria-label={`Play ${chordLabel(p)}, key ${KEYS[i]}`}
-                >
-                  <span className="pad-top">
-                    <kbd>{KEYS[i]}</kbd>
-                    <span className="pad-light" />
+          <div className="section-heading">
+            <h2>
+              {playMode === 'chords' ? (
+                <>
+                  Chord pads <span>10 keys, endless combinations</span>
+                </>
+              ) : (
+                <>
+                  Note keyboard <span>25 keys, two octaves</span>
+                </>
+              )}
+            </h2>
+          </div>
+          {playMode === 'chords' ? (
+            <>
+              <section className="pad-grid" aria-label="Chord pads">
+                {pads.map((p, i) => (
+                  <div
+                    key={i}
+                    className={`pad-shell ${selected === i ? 'selected' : ''} ${active.includes(i) ? 'active' : ''}`}
+                    style={{ '--pad-color': COLORS[i] } as React.CSSProperties}
+                  >
+                    <button
+                      className="pad"
+                      disabled={mode === 'playing' || p.quality === 'off'}
+                      onClick={() => triggerRef.current(i)}
+                      aria-label={`Play ${chordLabel(p)}, key ${KEYS[i]}`}
+                    >
+                      <span className="pad-top">
+                        <kbd>{KEYS[i]}</kbd>
+                        <span className="pad-light" />
+                      </span>
+                      <strong>{chordLabel(p)}</strong>
+                      <span className="note-names">
+                        {chordNoteNames(p).join(' · ') || 'No chord assigned'}
+                      </span>
+                      <span className="pad-lines">
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                    </button>
+                    <button
+                      className="edit-pad"
+                      onClick={() => setSelected(i)}
+                      aria-label={`Edit pad ${KEYS[i]}`}
+                    >
+                      {selected === i ? (
+                        <>
+                          <Check size={12} /> Editing
+                        </>
+                      ) : (
+                        'Edit chord'
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </section>
+              <section className="editor" aria-label="Edit selected chord">
+                <div>
+                  <span
+                    className="edit-key"
+                    style={{ color: COLORS[selected] }}
+                  >
+                    {KEYS[selected]}
                   </span>
-                  <strong>{chordLabel(p)}</strong>
-                  <span className="note-names">
-                    {chordNoteNames(p).join(' · ') || 'No chord assigned'}
-                  </span>
-                  <span className="pad-lines">
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                </button>
-                <button
-                  className="edit-pad"
-                  onClick={() => setSelected(i)}
-                  aria-label={`Edit pad ${KEYS[i]}`}
-                >
-                  {selected === i ? (
-                    <>
-                      <Check size={12} /> Editing
-                    </>
-                  ) : (
-                    'Edit chord'
-                  )}
-                </button>
+                  <strong>Edit pad {KEYS[selected]}</strong>
+                </div>
+                <ChordPicker
+                  chord={chosen}
+                  prefix="Chord"
+                  allowOff
+                  onChange={(chord) =>
+                    setPads((p) =>
+                      p.map((x, i) => (i === selected ? chord : x)),
+                    )
+                  }
+                />
+                <p>
+                  Choose a family, then an extension. Bass adds the note after
+                  the slash. Sus and diminished use no extension.
+                </p>
+              </section>
+            </>
+          ) : (
+            <section
+              className="note-controller"
+              aria-label="25-key note controller"
+            >
+              <div className="octave-bar">
+                <span>
+                  Range{' '}
+                  <strong>
+                    {noteLabel(midiNoteAt(0, baseOctave))}–
+                    {noteLabel(midiNoteAt(24, baseOctave))}
+                  </strong>
+                </span>
+                <div>
+                  <button
+                    aria-label="Octave down"
+                    disabled={mode !== 'idle' || baseOctave <= 1}
+                    onClick={() =>
+                      setBaseOctave((octave) => Math.max(1, octave - 1))
+                    }
+                  >
+                    <Minus size={15} /> Octave
+                  </button>
+                  <span>C{baseOctave}</span>
+                  <button
+                    aria-label="Octave up"
+                    disabled={mode !== 'idle' || baseOctave >= 6}
+                    onClick={() =>
+                      setBaseOctave((octave) => Math.min(6, octave + 1))
+                    }
+                  >
+                    <Plus size={15} /> Octave
+                  </button>
+                </div>
               </div>
-            ))}
-          </section>
-          <section className="editor" aria-label="Edit selected chord">
-            <div>
-              <span className="edit-key" style={{ color: COLORS[selected] }}>
-                {KEYS[selected]}
-              </span>
-              <strong>Edit pad {KEYS[selected]}</strong>
-            </div>
-            <ChordPicker
-              chord={chosen}
-              prefix="Chord"
-              allowOff
-              onChange={(chord) =>
-                setPads((p) => p.map((x, i) => (i === selected ? chord : x)))
-              }
-            />
-            <p>
-              Choose a family, then an extension. Bass adds the note after the
-              slash. Sus and diminished use no extension.
-            </p>
-          </section>
+              <div className="piano-scroll">
+                <div className="piano-keyboard">
+                  {NOTE_KEYS.filter((key) => !key.isBlack).map((key) => {
+                    const midi = midiNoteAt(key.index, baseOctave);
+                    return (
+                      <button
+                        key={key.index}
+                        className={`piano-key white-key ${active.includes(key.index) ? 'active' : ''}`}
+                        style={{
+                          left: `${(key.whiteIndex / NOTE_WHITE_COUNT) * 100}%`,
+                          width: `${100 / NOTE_WHITE_COUNT}%`,
+                        }}
+                        disabled={mode === 'playing' || mode === 'countin'}
+                        onClick={() => noteTriggerRef.current(key.index)}
+                        aria-label={`Play ${noteLabel(midi)}, key ${key.shortcut}`}
+                      >
+                        <kbd>{key.shortcut}</kbd>
+                        <span>{noteLabel(midi)}</span>
+                      </button>
+                    );
+                  })}
+                  {NOTE_KEYS.filter((key) => key.isBlack).map((key) => {
+                    const midi = midiNoteAt(key.index, baseOctave);
+                    return (
+                      <button
+                        key={key.index}
+                        className={`piano-key black-key ${active.includes(key.index) ? 'active' : ''}`}
+                        style={{
+                          left: `calc(${(key.whiteIndex / NOTE_WHITE_COUNT) * 100}% - 2.15%)`,
+                          width: '4.3%',
+                        }}
+                        disabled={mode === 'playing' || mode === 'countin'}
+                        onClick={() => noteTriggerRef.current(key.index)}
+                        aria-label={`Play ${noteLabel(midi)}, key ${key.shortcut}`}
+                      >
+                        <kbd>{key.shortcut}</kbd>
+                        <span>{noteLabel(midi)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="note-shortcuts">
+                White keys: Z X C V B N M · Q W E R T Y U I
+                <span>Black keys: S D G H J · 2 3 5 6 7</span>
+              </p>
+            </section>
+          )}
           <section className="recorder" aria-label="Performance recorder">
             <div className="recorder-head">
               <div>
@@ -1137,11 +1348,13 @@ export default function Home() {
                     <AudioLines size={25} />
                     <p>
                       {mode === 'recording'
-                        ? 'Listening for your first chord…'
+                        ? `Listening for your first ${playMode === 'notes' ? 'note' : 'chord'}…`
                         : 'A little space for your next idea.'}
                       <small>
                         {mode === 'recording'
-                          ? 'Play a number key or tap a pad.'
+                          ? playMode === 'notes'
+                            ? 'Play the piano keys or use the shown shortcuts.'
+                            : 'Play a number key or tap a pad.'
                           : 'Press Record, play freely, then Stop.'}
                       </small>
                     </p>
@@ -1151,16 +1364,16 @@ export default function Home() {
                     <button
                       key={i}
                       disabled={mode !== 'idle' || exporting}
-                      onClick={() => selectRecordedHit(i)}
-                      aria-label={`Edit recorded chord ${i + 1}: ${h.label} at ${h.time.toFixed(3)} seconds`}
+                      onClick={() => h.chord && selectRecordedHit(i)}
+                      aria-label={`${h.chord ? 'Edit recorded chord' : 'Recorded note'} ${i + 1}: ${h.label} at ${h.time.toFixed(3)} seconds`}
                       aria-pressed={editHit === i}
                       title={`${h.label} at ${h.time.toFixed(3)}s · ${h.duration}s · ${h.instrument}`}
-                      className={`clip ${editHit === i ? 'selected-clip' : ''}`}
+                      className={`clip ${!h.chord ? 'note-clip' : ''} ${editHit === i ? 'selected-clip' : ''}`}
                       style={{
                         left: `${(h.time / scale) * 100}%`,
                         width: `${(h.duration / scale) * 100}%`,
                         top: 8 + (h.pad % 4) * 27,
-                        background: COLORS[h.pad],
+                        background: COLORS[h.pad % COLORS.length],
                       }}
                     >
                       {h.label}
@@ -1197,73 +1410,77 @@ export default function Home() {
                 )}
               </div>
             </div>
-            {hits.length > 0 && mode !== 'recording' && (
-              <section
-                className="recorded-editor"
-                aria-label="Edit recorded chord"
-              >
-                <div className="recorded-editor-heading">
-                  <h3>Correct a chord</h3>
-                  <button
-                    className="undo-edit"
-                    disabled={!undoEdits.length || mode !== 'idle' || exporting}
-                    onClick={undoRecordedEdit}
-                  >
-                    <Undo2 size={15} /> Undo edit
-                  </button>
-                </div>
-                <p>
-                  Click a chord in the timeline, or choose it here. Only that
-                  occurrence changes.
-                </p>
-                <Choice
-                  label="Recorded chord"
-                  value={editHit === null ? 'none' : String(editHit)}
-                  options={[
-                    { value: 'none', label: 'Choose a recorded chord' },
-                    ...hits.map((hit, index) => ({
-                      value: String(index),
-                      label: `${index + 1}. ${hit.label} · ${hit.time.toFixed(3)} s`,
-                    })),
-                  ]}
-                  onChange={(value) => {
-                    if (value === 'none') setEditHit(null);
-                    else selectRecordedHit(Number(value));
-                  }}
-                  disabled={mode !== 'idle' || exporting}
-                />
-                {editHit !== null && hits[editHit] && (
-                  <>
-                    <div className="replacement-fields">
-                      <ChordPicker
-                        chord={replacement}
-                        prefix="Replacement"
-                        onChange={setReplacement}
-                        disabled={mode !== 'idle' || exporting}
-                      />
-                      <button
-                        className="replace-chord"
-                        onClick={applyRecordedEdit}
-                        disabled={
-                          mode !== 'idle' ||
-                          exporting ||
-                          hits[editHit].label === chordLabel(replacement)
-                        }
-                      >
-                        Replace {hits[editHit].label} with{' '}
-                        {chordLabel(replacement)}
-                      </button>
-                    </div>
-                    <small>
-                      {hits[editHit].time.toFixed(3)} s ·{' '}
-                      {hits[editHit].duration.toFixed(1)} s duration ·{' '}
-                      {hits[editHit].instrument} · Timing and sound settings
-                      stay the same
-                    </small>
-                  </>
-                )}
-              </section>
-            )}
+            {hits.length > 0 &&
+              hits.every((hit) => hit.chord) &&
+              mode !== 'recording' && (
+                <section
+                  className="recorded-editor"
+                  aria-label="Edit recorded chord"
+                >
+                  <div className="recorded-editor-heading">
+                    <h3>Correct a chord</h3>
+                    <button
+                      className="undo-edit"
+                      disabled={
+                        !undoEdits.length || mode !== 'idle' || exporting
+                      }
+                      onClick={undoRecordedEdit}
+                    >
+                      <Undo2 size={15} /> Undo edit
+                    </button>
+                  </div>
+                  <p>
+                    Click a chord in the timeline, or choose it here. Only that
+                    occurrence changes.
+                  </p>
+                  <Choice
+                    label="Recorded chord"
+                    value={editHit === null ? 'none' : String(editHit)}
+                    options={[
+                      { value: 'none', label: 'Choose a recorded chord' },
+                      ...hits.map((hit, index) => ({
+                        value: String(index),
+                        label: `${index + 1}. ${hit.label} · ${hit.time.toFixed(3)} s`,
+                      })),
+                    ]}
+                    onChange={(value) => {
+                      if (value === 'none') setEditHit(null);
+                      else selectRecordedHit(Number(value));
+                    }}
+                    disabled={mode !== 'idle' || exporting}
+                  />
+                  {editHit !== null && hits[editHit] && (
+                    <>
+                      <div className="replacement-fields">
+                        <ChordPicker
+                          chord={replacement}
+                          prefix="Replacement"
+                          onChange={setReplacement}
+                          disabled={mode !== 'idle' || exporting}
+                        />
+                        <button
+                          className="replace-chord"
+                          onClick={applyRecordedEdit}
+                          disabled={
+                            mode !== 'idle' ||
+                            exporting ||
+                            hits[editHit].label === chordLabel(replacement)
+                          }
+                        >
+                          Replace {hits[editHit].label} with{' '}
+                          {chordLabel(replacement)}
+                        </button>
+                      </div>
+                      <small>
+                        {hits[editHit].time.toFixed(3)} s ·{' '}
+                        {hits[editHit].duration.toFixed(1)} s duration ·{' '}
+                        {hits[editHit].instrument} · Timing and sound settings
+                        stay the same
+                      </small>
+                    </>
+                  )}
+                </section>
+              )}
             {hits.length > 0 && mode !== 'recording' && (
               <section className="trim-panel" aria-label="Trim recording">
                 <div className="trim-heading">
@@ -1402,8 +1619,8 @@ export default function Home() {
             <div className="take-meta">
               <span role="status">{status}</span>
               <span>
-                {hits.length} chord{hits.length === 1 ? '' : 's'} ·{' '}
-                {length.toFixed(2)} s{' '}
+                {hits.length} {recordedKind}
+                {hits.length === 1 ? '' : 's'} · {length.toFixed(2)} s{' '}
                 <span className="desktop-only">· No quantization</span>
               </span>
             </div>
@@ -1516,9 +1733,7 @@ export default function Home() {
                         }
                       >
                         <div className="track-identity">
-                          <span
-                            className="track-color"
-                          />
+                          <span className="track-color" />
                           <span>
                             <strong>{track.name}</strong>
                             <small>

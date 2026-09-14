@@ -258,6 +258,165 @@ h2 {
   font-size: 12px;
   color: #a0ada3;
 }
+.play-mode-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+.play-mode-bar > div > span {
+  display: block;
+  margin-bottom: 7px;
+  color: #8e9b91;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+}
+.play-mode-switch {
+  display: inline-flex;
+  min-width: 0;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid #3a453c;
+  border-radius: 9px;
+  background: #181e1a;
+}
+.play-mode-switch button {
+  min-width: 92px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #95a099;
+  font-size: 13px;
+}
+.play-mode-switch button[aria-pressed='true'] {
+  background: #35462c;
+  color: #c9ff96;
+}
+.note-controller {
+  margin-bottom: 24px;
+  overflow: hidden;
+  border: 1px solid #37413a;
+  border-radius: 14px;
+  background: #171d19;
+}
+.octave-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 15px;
+  border-bottom: 1px solid #37413a;
+  color: #8f9b92;
+  font-size: 12px;
+}
+.octave-bar strong {
+  color: #dbe5dc;
+  font-weight: 600;
+}
+.octave-bar > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.octave-bar > div > span {
+  min-width: 42px;
+  color: #b9fa73;
+  font-weight: 650;
+  text-align: center;
+}
+.octave-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid #414b43;
+  border-radius: 6px;
+  background: #232b25;
+  color: #c5cec6;
+  font-size: 12px;
+}
+.piano-scroll {
+  overflow-x: auto;
+  padding: 18px 18px 6px;
+}
+.piano-keyboard {
+  position: relative;
+  min-width: 860px;
+  height: 190px;
+}
+.piano-key {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 0 3px 12px;
+  user-select: none;
+}
+.piano-key kbd {
+  display: grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  font:
+    650 11px var(--font-geist-mono),
+    monospace;
+  opacity: 0.72;
+}
+.piano-key span {
+  font-size: 11px;
+  font-weight: 650;
+}
+.white-key {
+  z-index: 1;
+  height: 184px;
+  border: 1px solid #8e9690;
+  border-radius: 0 0 7px 7px;
+  background: #e9ece5;
+  color: #202821;
+}
+.white-key:hover:not(:disabled) {
+  background: #d9e8ca;
+}
+.black-key {
+  top: 0;
+  bottom: auto;
+  z-index: 2;
+  height: 116px;
+  border: 1px solid #465049;
+  border-radius: 0 0 6px 6px;
+  background: #161b18;
+  color: #dbe4dc;
+  box-shadow: 0 5px 8px #0008;
+}
+.black-key:hover:not(:disabled) {
+  background: #2d3a2a;
+  color: #cfff9f;
+}
+.piano-key.active {
+  background: #b9fa73;
+  color: #172012;
+  transform: translateY(3px);
+}
+.note-shortcuts {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  padding: 11px 18px 13px;
+  color: #849188;
+  font:
+    11px var(--font-geist-mono),
+    monospace;
+}
 .pad-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -612,6 +771,9 @@ footer > span:first-child {
   .title-row {
     margin-bottom: 23px;
   }
+  .piano-keyboard {
+    min-width: 760px;
+  }
   h1 {
     font-size: 29px;
   }
@@ -662,6 +824,18 @@ footer > span:first-child {
   }
   .keyboard-note {
     font-size: 11px;
+  }
+  .play-mode-bar,
+  .octave-bar,
+  .note-shortcuts {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .keyboard-note {
+    display: none;
+  }
+  .play-mode-switch button {
+    min-width: 82px;
   }
   .section-heading h2 {
     font-size: 17px;
@@ -838,6 +1012,9 @@ footer > span:first-child {
   cursor: pointer;
   text-align: left;
   font-family: inherit;
+}
+.clip.note-clip {
+  cursor: default;
 }
 .clip:disabled {
   opacity: 0.9;
