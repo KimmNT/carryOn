@@ -60,6 +60,7 @@ type Track = {
   loop?: boolean;
   muted?: boolean;
   solo?: boolean;
+  color?: string;
   name: string;
   instrument: Instrument;
   hits: Hit[];
@@ -294,7 +295,14 @@ export default function Home() {
               Number.isFinite(t.length),
           )
         )
-          setTracks(parsed);
+          {
+            const normalized = parsed.map((track, index) => ({
+              ...track,
+              color: track.color ?? COLORS[index % COLORS.length],
+            }));
+            setTracks(normalized);
+            localStorage.setItem('carryon-takes-v1', JSON.stringify(normalized));
+          }
       }
     } catch {
       setStatus('Saved takes could not be loaded in this browser.');
@@ -422,6 +430,10 @@ export default function Home() {
         length,
         trim: [...trim] as [number, number],
         undo: [],
+        color:
+          COLORS.find(
+            (color) => !tracks.some((track) => track.color === color),
+          ) ?? COLORS[tracks.length % COLORS.length],
       },
     ];
     if (persistTracks(next)) {
@@ -1485,6 +1497,8 @@ export default function Home() {
 
                 {tracks.map((track, index) => {
                   const takeDuration = track.trim[1] - track.trim[0];
+                  const trackColor =
+                    track.color ?? COLORS[index % COLORS.length];
                   const startTime = clampTrackStart(
                     track.offset ?? 0,
                     takeDuration,
@@ -1493,13 +1507,17 @@ export default function Home() {
                   const disabled = mode !== 'idle' || exporting;
                   return (
                     <div className="arrangement-row" key={index}>
-                      <div className="track-strip">
+                      <div
+                        className="track-strip"
+                        style={
+                          {
+                            '--track-color': trackColor,
+                          } as React.CSSProperties
+                        }
+                      >
                         <div className="track-identity">
                           <span
                             className="track-color"
-                            style={{
-                              background: COLORS[index % COLORS.length],
-                            }}
                           />
                           <span>
                             <strong>{track.name}</strong>
@@ -1579,7 +1597,7 @@ export default function Home() {
                                 1.25,
                                 (takeDuration / mixLength) * 100,
                               )}%`,
-                              '--track-color': COLORS[index % COLORS.length],
+                              '--track-color': trackColor,
                             } as React.CSSProperties
                           }
                           aria-label={`${track.name}, starts at ${startTime.toFixed(
