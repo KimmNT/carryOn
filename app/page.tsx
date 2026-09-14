@@ -1,5 +1,10 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import {
   Circle,
   Square,
@@ -42,6 +47,7 @@ import {
   playbackPosition,
   renderTake,
   encodeWav,
+  clampTrackStart,
   type Hit,
   type Pad,
   type Instrument,
@@ -51,6 +57,8 @@ import { mixTracks } from '@/lib/instrument';
 type Track = {
   offset?: number;
   loop?: boolean;
+  muted?: boolean;
+  solo?: boolean;
   name: string;
   instrument: Instrument;
   hits: Hit[];
@@ -205,6 +213,12 @@ const fmt = (t: number) =>
   `${Math.floor(t / 60)
     .toString()
     .padStart(2, '0')}:${(t % 60).toFixed(2).padStart(5, '0')}`;
+const rulerTime = (t: number) =>
+  t >= 60
+    ? `${Math.floor(t / 60)}:${Math.round(t % 60)
+        .toString()
+        .padStart(2, '0')}`
+    : `${Math.round(t)}s`;
 export default function Home() {
   const [pads, setPads] = useState<Pad[]>(DEFAULT_PADS),
     [instrument, setInstrument] = useState<Instrument>('piano'),
@@ -232,19 +246,32 @@ export default function Home() {
   const [tab, setTab] = useState<'record' | 'session'>('record');
   const [sessionLength, setSessionLength] = useState(10);
   const [takeName, setTakeName] = useState('');
-  const [selectedTakes, setSelectedTakes] = useState<number[]>([]);
   const [storageReady, setStorageReady] = useState(false);
-  const selectedTracks = tracks.filter((_, i) => selectedTakes.includes(i));
+  const [draggingTrack, setDraggingTrack] = useState<number | null>(null);
+  const drag = useRef<{
+    index: number;
+    pointerId: number;
+    originX: number;
+    originOffset: number;
+    lastOffset: number;
+    laneWidth: number;
+    maxStart: number;
+  } | null>(null);
+  const soloActive = tracks.some((track) => track.solo && !track.muted);
+  const selectedTracks = tracks.filter(
+    (track) => !track.muted && (!soloActive || track.solo),
+  );
   const longestSelected = Math.max(
     0,
-    ...selectedTracks.map((t) => t.trim[1] - t.trim[0]),
+    ...tracks.map((t) => t.trim[1] - t.trim[0]),
   );
   const mixLength = Math.max(sessionLength, longestSelected);
   const currentTracks = selectedTracks.map((track) => ({
     ...track,
-    offset: Math.min(
-      Math.max(0, track.offset ?? 0),
-      Math.max(0, mixLength - (track.trim[1] - track.trim[0])),
+    offset: clampTrackStart(
+      track.offset ?? 0,
+      track.trim[1] - track.trim[0],
+      mixLength,
     ),
   }));
   useEffect(() => {
@@ -285,6 +312,91 @@ export default function Home() {
       return false;
     }
   }
+  function setTrackState(index: number, change: Partial<Track>) {
+    persistTracks(
+      tracks.map((track, trackIndex) =>
+        trackIndex === index ? { ...track, ...change } : track,
+      ),
+    );
+  }
+  function startTrackDrag(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    index: number,
+    duration: number,
+  ) {
+    if (modeRef.current !== 'idle' || exporting) return;
+    const lane = event.currentTarget.parentElement;
+    if (!lane) return;
+    const maxStart = Math.max(0, mixLength - duration);
+    drag.current = {
+      index,
+      pointerId: event.pointerId,
+      originX: event.clientX,
+      originOffset: clampTrackStart(
+        tracks[index].offset ?? 0,
+        duration,
+        mixLength,
+      ),
+      lastOffset: clampTrackStart(
+        tracks[index].offset ?? 0,
+        duration,
+        mixLength,
+      ),
+      laneWidth: lane.getBoundingClientRect().width,
+      maxStart,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDraggingTrack(index);
+  }
+  function moveTrack(event: ReactPointerEvent<HTMLButtonElement>) {
+    const activeDrag = drag.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
+    const secondsPerPixel = mixLength / activeDrag.laneWidth;
+    const offset = Math.max(
+      0,
+      Math.min(
+        activeDrag.maxStart,
+        activeDrag.originOffset +
+          (event.clientX - activeDrag.originX) * secondsPerPixel,
+      ),
+    );
+    activeDrag.lastOffset = Math.round(offset * 10) / 10;
+    setTracks((current) =>
+      current.map((track, index) =>
+        index === activeDrag.index
+          ? { ...track, offset: activeDrag.lastOffset }
+          : track,
+      ),
+    );
+  }
+  function finishTrackDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const activeDrag = drag.current;
+    if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    const next = tracks.map((track, index) =>
+      index === activeDrag.index
+        ? { ...track, offset: activeDrag.lastOffset }
+        : track,
+    );
+    drag.current = null;
+    setDraggingTrack(null);
+    persistTracks(next);
+  }
+  function changeSessionLength(value: number) {
+    if (!Number.isFinite(value)) return;
+    const nextLength = Math.min(1800, Math.max(10, longestSelected, value));
+    setSessionLength(nextLength);
+    persistTracks(
+      tracks.map((track) => ({
+        ...track,
+        offset: clampTrackStart(
+          track.offset ?? 0,
+          track.trim[1] - track.trim[0],
+          nextLength,
+        ),
+      })),
+    );
+  }
   function saveTake() {
     if (
       !hits.length ||
@@ -306,7 +418,6 @@ export default function Home() {
     ];
     if (persistTracks(next)) {
       const savedName = takeName.trim();
-      setSelectedTakes([...selectedTakes, tracks.length]);
       recorded.current = [];
       setHits([]);
       setLength(0);
@@ -788,6 +899,11 @@ export default function Home() {
   }, []);
   const scale = mode === 'recording' ? Math.max(8, clock + 2) : length || 8,
     chosen = pads[selected];
+  const timelineWidth = Math.max(960, Math.min(18000, mixLength * 22));
+  const timelineTicks = Array.from({ length: 11 }, (_, index) => {
+    const seconds = (mixLength * index) / 10;
+    return { seconds, left: `${index * 10}%` };
+  });
   return (
     <main>
       <header className="topbar">
@@ -1275,195 +1391,249 @@ export default function Home() {
         </div>
         {tab === 'session' && (
           <section className="recorder session-panel" aria-label="Session">
-            <h2>Session</h2>
-            <label>
-              Session length (seconds)
-              <Input
-                aria-label="Session length in seconds"
-                type="number"
-                min={Math.max(10, longestSelected)}
-                max={1800}
-                step={1}
-                value={mixLength}
-                disabled={mode !== 'idle' || exporting}
-                onChange={(e) => {
-                  const value = Number(e.target.value);
-                  if (Number.isFinite(value))
-                    setSessionLength(
-                      Math.min(1800, Math.max(10, longestSelected, value)),
-                    );
-                }}
-              />
-            </label>
-            <p>
-              Select saved takes to play together. Each take starts at its
-              trimmed beginning.
-            </p>
-            {!tracks.length && (
-              <p>
-                No saved takes yet. Record a take, give it a name, and save it
-                here.
-              </p>
-            )}
-            {tracks.map((track, i) => (
-              <div className="saved-take" key={i}>
-                {(() => {
+            <div className="session-toolbar">
+              <div>
+                <p className="eyebrow">ARRANGEMENT</p>
+                <h2>Session</h2>
+              </div>
+              <label className="session-duration">
+                Session length
+                <span>
+                  <Input
+                    aria-label="Session length in seconds"
+                    type="number"
+                    min={Math.max(10, longestSelected)}
+                    max={1800}
+                    step={1}
+                    value={mixLength}
+                    disabled={mode !== 'idle' || exporting}
+                    onChange={(event) =>
+                      changeSessionLength(Number(event.target.value))
+                    }
+                  />
+                  sec
+                </span>
+              </label>
+              <div className="session-transport">
+                <button
+                  className="session-play"
+                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  onClick={() => replay(false, true)}
+                >
+                  <Play size={15} fill="currentColor" /> Play session
+                </button>
+                <button
+                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  onClick={() => replay(true, true)}
+                >
+                  <Repeat2 size={15} /> Loop session
+                </button>
+                <button disabled={mode === 'idle'} onClick={stop}>
+                  <Square size={14} fill="currentColor" /> Stop
+                </button>
+                <button
+                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  onClick={() => download(true)}
+                >
+                  <Download size={15} /> Download mix
+                </button>
+              </div>
+            </div>
+
+            <div className="arrangement-help">
+              Drag a take to place it. Solo hears one or more chosen tracks;
+              Mute silences a track.
+            </div>
+
+            <div className="arrangement" aria-label="Session arrangement">
+              <div
+                className="arrangement-grid"
+                style={
+                  {
+                    '--timeline-width': `${timelineWidth}px`,
+                  } as React.CSSProperties
+                }
+              >
+                <div className="track-list-heading">TRACKS</div>
+                <div className="timeline-ruler" aria-hidden="true">
+                  {timelineTicks.map((tick) => (
+                    <span key={tick.seconds} style={{ left: tick.left }}>
+                      {rulerTime(tick.seconds)}
+                    </span>
+                  ))}
+                </div>
+
+                {!tracks.length && (
+                  <div className="session-empty">
+                    <AudioLines size={26} />
+                    <span>
+                      No saved takes yet.
+                      <small>
+                        Record, name, and save a take to arrange it here.
+                      </small>
+                    </span>
+                  </div>
+                )}
+
+                {tracks.map((track, index) => {
                   const takeDuration = track.trim[1] - track.trim[0];
-                  const maxStart = Math.max(0, mixLength - takeDuration);
-                  const startTime = Math.min(
-                    Math.max(0, track.offset ?? 0),
-                    maxStart,
+                  const startTime = clampTrackStart(
+                    track.offset ?? 0,
+                    takeDuration,
+                    mixLength,
                   );
+                  const disabled = mode !== 'idle' || exporting;
                   return (
-                    <>
-                      <button
-                        className="track-toggle"
-                        role="switch"
-                        aria-label={'Include ' + track.name}
-                        aria-checked={selectedTakes.includes(i)}
-                        disabled={mode !== 'idle' || exporting}
-                        onClick={() =>
-                          setSelectedTakes(
-                            selectedTakes.includes(i)
-                              ? selectedTakes.filter((n) => n !== i)
-                              : [...selectedTakes, i],
-                          )
-                        }
-                      >
-                        <span className="toggle-light" />
-                        <strong>{track.name}</strong>
-                      </button>
-                      <span>
-                        {track.instrument} ·{' '}
-                        {(track.trim[1] - track.trim[0]).toFixed(2)} s
-                      </span>
-                      <label className="take-position">
-                        Start (seconds)
-                        <Input
-                          type="number"
-                          min={0}
-                          max={1800}
-                          step={0.1}
-                          aria-label={'Start time for ' + track.name}
-                          value={startTime}
-                          disabled={mode !== 'idle' || exporting}
-                          onChange={(e) => {
-                            const value = Number(e.target.value);
-                            if (Number.isFinite(value))
-                              persistTracks(
-                                tracks.map((t, n) =>
-                                  n === i
-                                    ? {
-                                        ...t,
-                                        offset: Math.max(
-                                          0,
-                                          Math.min(maxStart, value),
-                                        ),
-                                      }
-                                    : t,
-                                ),
-                              );
-                          }}
-                        />
-                      </label>
-                      <div className="take-lane">
-                        <div
-                          className="take-bar"
-                          style={{
-                            left: (startTime / mixLength) * 100 + '%',
-                            width:
-                              Math.min(
-                                100,
-                                ((track.trim[1] - track.trim[0]) / mixLength) *
-                                  100,
-                              ) + '%',
+                    <div className="arrangement-row" key={index}>
+                      <div className="track-strip">
+                        <div className="track-identity">
+                          <span
+                            className="track-color"
+                            style={{
+                              background: COLORS[index % COLORS.length],
+                            }}
+                          />
+                          <span>
+                            <strong>{track.name}</strong>
+                            <small>
+                              {track.instrument} · {takeDuration.toFixed(1)} s
+                            </small>
+                          </span>
+                        </div>
+                        <div className="track-controls">
+                          <button
+                            aria-label={'Solo ' + track.name}
+                            aria-pressed={!!track.solo}
+                            title="Solo"
+                            disabled={disabled}
+                            onClick={() =>
+                              setTrackState(index, { solo: !track.solo })
+                            }
+                          >
+                            S
+                          </button>
+                          <button
+                            aria-label={'Mute ' + track.name}
+                            aria-pressed={!!track.muted}
+                            title="Mute"
+                            disabled={disabled}
+                            onClick={() =>
+                              setTrackState(index, { muted: !track.muted })
+                            }
+                          >
+                            M
+                          </button>
+                          <button
+                            className="track-listen"
+                            aria-label={'Listen to ' + track.name}
+                            title="Listen to this take"
+                            disabled={disabled}
+                            onClick={() => replay(false, true, track)}
+                          >
+                            <Play size={12} fill="currentColor" />
+                          </button>
+                          <button
+                            className="track-loop"
+                            aria-label={'Loop ' + track.name}
+                            aria-pressed={!!track.loop}
+                            title="Repeat until the Session ends"
+                            disabled={disabled}
+                            onClick={() =>
+                              setTrackState(index, { loop: !track.loop })
+                            }
+                          >
+                            <Repeat2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="arrangement-lane">
+                        {timelineTicks.map((tick) => (
+                          <i key={tick.seconds} style={{ left: tick.left }} />
+                        ))}
+                        <button
+                          className={`arrangement-clip ${
+                            draggingTrack === index ? 'is-dragging' : ''
+                          } ${track.muted ? 'is-muted' : ''}`}
+                          style={
+                            {
+                              left: `${(startTime / mixLength) * 100}%`,
+                              width: `${Math.max(
+                                1.25,
+                                (takeDuration / mixLength) * 100,
+                              )}%`,
+                              '--track-color': COLORS[index % COLORS.length],
+                            } as React.CSSProperties
+                          }
+                          aria-label={`${track.name}, starts at ${startTime.toFixed(
+                            1,
+                          )} seconds. Drag to move.`}
+                          title={`${track.name} · starts ${startTime.toFixed(
+                            1,
+                          )}s · drag to move`}
+                          disabled={disabled}
+                          onPointerDown={(event) =>
+                            startTrackDrag(event, index, takeDuration)
+                          }
+                          onPointerMove={moveTrack}
+                          onPointerUp={finishTrackDrag}
+                          onPointerCancel={finishTrackDrag}
+                          onKeyDown={(event) => {
+                            if (
+                              event.key !== 'ArrowLeft' &&
+                              event.key !== 'ArrowRight'
+                            )
+                              return;
+                            event.preventDefault();
+                            const direction =
+                              event.key === 'ArrowRight' ? 1 : -1;
+                            const step = event.shiftKey ? 1 : 0.1;
+                            setTrackState(index, {
+                              offset: clampTrackStart(
+                                startTime + direction * step,
+                                takeDuration,
+                                mixLength,
+                              ),
+                            });
                           }}
                         >
-                          {track.name}
-                        </div>
-                        <input
-                          type="range"
-                          aria-label={'Move ' + track.name}
-                          min={0}
-                          max={maxStart}
-                          step={0.1}
-                          value={startTime}
-                          disabled={mode !== 'idle' || exporting}
-                          onChange={(e) =>
-                            persistTracks(
-                              tracks.map((t, n) =>
-                                n === i
-                                  ? {
-                                      ...t,
-                                      offset: Math.max(
-                                        0,
-                                        Math.min(
-                                          maxStart,
-                                          Number(e.target.value),
-                                        ),
-                                      ),
-                                    }
-                                  : t,
-                              ),
-                            )
-                          }
-                        />
+                          <span>{track.name}</span>
+                          <small>
+                            {startTime.toFixed(1)}s →{' '}
+                            {(startTime + takeDuration).toFixed(1)}s
+                          </small>
+                        </button>
                       </div>
-                      <button
-                        role="switch"
-                        aria-checked={!!track.loop}
-                        aria-label={'Loop ' + track.name}
-                        disabled={mode !== 'idle' || exporting}
-                        onClick={() =>
-                          persistTracks(
-                            tracks.map((t, n) =>
-                              n === i ? { ...t, loop: !t.loop } : t,
-                            ),
-                          )
-                        }
-                      >
-                        {track.loop ? 'Loop on' : 'Loop off'}
-                      </button>
-                      <button
-                        disabled={mode !== 'idle' || exporting}
-                        onClick={() => replay(false, true, track)}
-                      >
-                        Listen
-                      </button>
-                    </>
+                    </div>
                   );
-                })()}
+                })}
+
+                {tracks.length > 0 && mode === 'playing' && (
+                  <div
+                    className="session-playhead"
+                    style={
+                      {
+                        '--playhead-left': `${(clock / mixLength) * timelineWidth}px`,
+                      } as React.CSSProperties
+                    }
+                    aria-hidden="true"
+                  />
+                )}
               </div>
-            ))}
-            <div className="layer-actions">
-              <button
-                disabled={!hasMix || mode !== 'idle' || exporting}
-                onClick={() => replay(false, true)}
-              >
-                Play selected
-              </button>
-              <button
-                disabled={!hasMix || mode !== 'idle' || exporting}
-                onClick={() => replay(true, true)}
-              >
-                Loop session
-              </button>
-              <button disabled={mode === 'idle'} onClick={stop}>
-                Stop
-              </button>
-              <button
-                disabled={!hasMix || mode !== 'idle' || exporting}
-                onClick={() => download(true)}
-              >
-                Download mix
-              </button>
             </div>
-            <p role="status">
-              {status} · {fmt(clock)}
-            </p>
-            <small>
-              Looped takes repeat until the session ends. Saved takes stay in
-              this browser; downloads provide a separate backup.
+
+            <div className="session-footer">
+              <span role="status">
+                {status} · {fmt(clock)}
+              </span>
+              <span>
+                {tracks.length} take{tracks.length === 1 ? '' : 's'} ·{' '}
+                {rulerTime(mixLength)} Session
+              </span>
+            </div>
+            <small className="session-note">
+              Looped takes repeat from their start position until the Session
+              ends. Saved takes stay in this browser.
             </small>
           </section>
         )}

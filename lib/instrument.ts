@@ -411,6 +411,19 @@ export type AudioTrack = {
   length: number;
   trim: [number, number];
 };
+export function clampTrackStart(
+  offset: number,
+  takeDuration: number,
+  sessionDuration: number,
+) {
+  return Math.max(
+    0,
+    Math.min(
+      Number.isFinite(offset) ? offset : 0,
+      Math.max(0, sessionDuration - takeDuration),
+    ),
+  );
+}
 /** With a session duration, layers are clipped to its fixed end. */
 export function mixTracks(
   tracks: AudioTrack[],

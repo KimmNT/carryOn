@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
-import { mixTracks, renderTake, trimAudio } from '../lib/instrument.ts';
+import {
+  clampTrackStart,
+  mixTracks,
+  renderTake,
+  trimAudio,
+} from '../lib/instrument.ts';
 const rate = 8000;
+assert.equal(clampTrackStart(30, 7.9, 30), 22.1);
+assert.equal(clampTrackStart(-2, 7.9, 30), 0);
+assert.equal(clampTrackStart(4, 12, 10), 0);
 const hit = {
   pad: 0,
   time: 0.1,
