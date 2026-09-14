@@ -234,12 +234,19 @@ export default function Home() {
   const [takeName, setTakeName] = useState('');
   const [selectedTakes, setSelectedTakes] = useState<number[]>([]);
   const [storageReady, setStorageReady] = useState(false);
-  const currentTracks = tracks.filter((_, i) => selectedTakes.includes(i));
+  const selectedTracks = tracks.filter((_, i) => selectedTakes.includes(i));
   const longestSelected = Math.max(
     0,
-    ...currentTracks.map((t) => (t.offset ?? 0) + t.trim[1] - t.trim[0]),
+    ...selectedTracks.map((t) => t.trim[1] - t.trim[0]),
   );
   const mixLength = Math.max(sessionLength, longestSelected);
+  const currentTracks = selectedTracks.map((track) => ({
+    ...track,
+    offset: Math.min(
+      Math.max(0, track.offset ?? 0),
+      Math.max(0, mixLength - (track.trim[1] - track.trim[0])),
+    ),
+  }));
   useEffect(() => {
     setSessionLength((n) => Math.max(n, longestSelected));
   }, [longestSelected]);
@@ -298,9 +305,18 @@ export default function Home() {
       },
     ];
     if (persistTracks(next)) {
+      const savedName = takeName.trim();
       setSelectedTakes([...selectedTakes, tracks.length]);
-      setStatus('Saved ' + takeName.trim() + ' to Session');
+      recorded.current = [];
+      setHits([]);
+      setLength(0);
+      updateTrim(0, 0);
+      setEditHit(null);
+      setUndoEdits([]);
+      setClock(0);
+      takeCache.current = null;
       setTakeName('');
+      setStatus('Saved ' + savedName + ' to Session · ready for a new take');
     }
   }
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -1291,107 +1307,132 @@ export default function Home() {
             )}
             {tracks.map((track, i) => (
               <div className="saved-take" key={i}>
-                <button
-                  className="track-toggle"
-                  role="switch"
-                  aria-label={'Include ' + track.name}
-                  aria-checked={selectedTakes.includes(i)}
-                  disabled={mode !== 'idle' || exporting}
-                  onClick={() =>
-                    setSelectedTakes(
-                      selectedTakes.includes(i)
-                        ? selectedTakes.filter((n) => n !== i)
-                        : [...selectedTakes, i],
-                    )
-                  }
-                >
-                  <span className="toggle-light" />
-                  <strong>{track.name}</strong>
-                </button>
-                <span>
-                  {track.instrument} ·{' '}
-                  {(track.trim[1] - track.trim[0]).toFixed(2)} s
-                </span>
-                <label className="take-position">
-                  Start (seconds)
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1800}
-                    step={0.1}
-                    aria-label={'Start time for ' + track.name}
-                    value={track.offset ?? 0}
-                    disabled={mode !== 'idle' || exporting}
-                    onChange={(e) => {
-                      const value = Number(e.target.value);
-                      if (Number.isFinite(value))
-                        persistTracks(
-                          tracks.map((t, n) =>
-                            n === i
-                              ? {
-                                  ...t,
-                                  offset: Math.max(0, Math.min(1800, value)),
-                                }
-                              : t,
-                          ),
-                        );
-                    }}
-                  />
-                </label>
-                <div className="take-lane">
-                  <div
-                    className="take-bar"
-                    style={{
-                      left: ((track.offset ?? 0) / mixLength) * 100 + '%',
-                      width:
-                        Math.min(
-                          100,
-                          ((track.trim[1] - track.trim[0]) / mixLength) * 100,
-                        ) + '%',
-                    }}
-                  >
-                    {track.name}
-                  </div>
-                  <input
-                    type="range"
-                    aria-label={'Move ' + track.name}
-                    min={0}
-                    max={mixLength}
-                    step={0.1}
-                    value={track.offset ?? 0}
-                    disabled={mode !== 'idle' || exporting}
-                    onChange={(e) =>
-                      persistTracks(
-                        tracks.map((t, n) =>
-                          n === i
-                            ? { ...t, offset: Number(e.target.value) }
-                            : t,
-                        ),
-                      )
-                    }
-                  />
-                </div>
-                <button
-                  role="switch"
-                  aria-checked={!!track.loop}
-                  aria-label={'Loop ' + track.name}
-                  disabled={mode !== 'idle' || exporting}
-                  onClick={() =>
-                    persistTracks(
-                      tracks.map((t, n) =>
-                        n === i ? { ...t, loop: !t.loop } : t,
-                      ),
-                    )
-                  }
-                >
-                  {track.loop ? 'Loop on' : 'Loop off'}
-                </button>
-                <button
-                  disabled={mode !== 'idle' || exporting}
-                  onClick={() => replay(false, true, track)}
-                >
-                  Listen
-                </button>
+                {(() => {
+                  const takeDuration = track.trim[1] - track.trim[0];
+                  const maxStart = Math.max(0, mixLength - takeDuration);
+                  const startTime = Math.min(
+                    Math.max(0, track.offset ?? 0),
+                    maxStart,
+                  );
+                  return (
+                    <>
+                      <button
+                        className="track-toggle"
+                        role="switch"
+                        aria-label={'Include ' + track.name}
+                        aria-checked={selectedTakes.includes(i)}
+                        disabled={mode !== 'idle' || exporting}
+                        onClick={() =>
+                          setSelectedTakes(
+                            selectedTakes.includes(i)
+                              ? selectedTakes.filter((n) => n !== i)
+                              : [...selectedTakes, i],
+                          )
+                        }
+                      >
+                        <span className="toggle-light" />
+                        <strong>{track.name}</strong>
+                      </button>
+                      <span>
+                        {track.instrument} ·{' '}
+                        {(track.trim[1] - track.trim[0]).toFixed(2)} s
+                      </span>
+                      <label className="take-position">
+                        Start (seconds)
+                        <Input
+                          type="number"
+                          min={0}
+                          max={1800}
+                          step={0.1}
+                          aria-label={'Start time for ' + track.name}
+                          value={startTime}
+                          disabled={mode !== 'idle' || exporting}
+                          onChange={(e) => {
+                            const value = Number(e.target.value);
+                            if (Number.isFinite(value))
+                              persistTracks(
+                                tracks.map((t, n) =>
+                                  n === i
+                                    ? {
+                                        ...t,
+                                        offset: Math.max(
+                                          0,
+                                          Math.min(maxStart, value),
+                                        ),
+                                      }
+                                    : t,
+                                ),
+                              );
+                          }}
+                        />
+                      </label>
+                      <div className="take-lane">
+                        <div
+                          className="take-bar"
+                          style={{
+                            left: (startTime / mixLength) * 100 + '%',
+                            width:
+                              Math.min(
+                                100,
+                                ((track.trim[1] - track.trim[0]) / mixLength) *
+                                  100,
+                              ) + '%',
+                          }}
+                        >
+                          {track.name}
+                        </div>
+                        <input
+                          type="range"
+                          aria-label={'Move ' + track.name}
+                          min={0}
+                          max={maxStart}
+                          step={0.1}
+                          value={startTime}
+                          disabled={mode !== 'idle' || exporting}
+                          onChange={(e) =>
+                            persistTracks(
+                              tracks.map((t, n) =>
+                                n === i
+                                  ? {
+                                      ...t,
+                                      offset: Math.max(
+                                        0,
+                                        Math.min(
+                                          maxStart,
+                                          Number(e.target.value),
+                                        ),
+                                      ),
+                                    }
+                                  : t,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                      <button
+                        role="switch"
+                        aria-checked={!!track.loop}
+                        aria-label={'Loop ' + track.name}
+                        disabled={mode !== 'idle' || exporting}
+                        onClick={() =>
+                          persistTracks(
+                            tracks.map((t, n) =>
+                              n === i ? { ...t, loop: !t.loop } : t,
+                            ),
+                          )
+                        }
+                      >
+                        {track.loop ? 'Loop on' : 'Loop off'}
+                      </button>
+                      <button
+                        disabled={mode !== 'idle' || exporting}
+                        onClick={() => replay(false, true, track)}
+                      >
+                        Listen
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
             ))}
             <div className="layer-actions">

@@ -411,11 +411,11 @@ export type AudioTrack = {
   length: number;
   trim: [number, number];
 };
-/** Loop selected layers up to the longest trimmed take, never extending the mix. */
+/** With a session duration, layers are clipped to its fixed end. */
 export function mixTracks(
   tracks: AudioTrack[],
   rate: number,
-  minimumDuration = 0,
+  sessionDuration = 0,
 ) {
   const layers = tracks
     .filter((t) => t.hits.length && t.trim[1] > t.trim[0])
@@ -425,15 +425,18 @@ export function mixTracks(
       pcm: trimAudio(renderTake(t.hits, t.length, rate), rate, ...t.trim),
     }));
   const mixed = new Float32Array(
-    Math.max(
-      Math.round(Math.max(0, minimumDuration) * rate),
-      ...layers.map((p) => p.start + p.pcm.length),
-    ),
+    sessionDuration > 0
+      ? Math.round(sessionDuration * rate)
+      : Math.max(0, ...layers.map((p) => p.start + p.pcm.length)),
   );
   for (const layer of layers)
     for (
       let i = 0;
-      i < (layer.loop ? mixed.length - layer.start : layer.pcm.length);
+      i <
+      Math.min(
+        mixed.length - layer.start,
+        layer.loop ? mixed.length - layer.start : layer.pcm.length,
+      );
       i++
     )
       mixed[layer.start + i] += layer.pcm[i % layer.pcm.length];
