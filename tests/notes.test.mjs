@@ -6,6 +6,10 @@ import {
   midiNoteAt,
   noteLabel,
   renderTake,
+  synthesize,
+  CHORD_RELEASE_SECONDS,
+  chordNotes,
+  DEFAULT_PADS,
 } from '../lib/instrument.ts';
 
 test('the 25-key controller spans two octaves and the next C', () => {
@@ -47,4 +51,30 @@ test('a recorded single note renders through the take pipeline', () => {
   );
   assert.equal(samples.length, 22050);
   assert.ok(samples.some((sample) => sample !== 0));
+});
+
+test('held notes and chords remain audible until release and fade afterward', () => {
+  const heldFor = 1.2;
+  for (const notes of [[60], chordNotes(DEFAULT_PADS[0])]) {
+    for (const instrument of ['piano', 'guitar', 'organ']) {
+      const samples = synthesize(
+        {
+          pad: 0,
+          time: 0,
+          notes,
+          label: 'Held',
+          instrument,
+          heldFor,
+          duration: heldFor + CHORD_RELEASE_SECONDS,
+          volume: 0.7,
+        },
+        44100,
+      );
+      const held = samples.subarray(0.9 * 44100, 1.0 * 44100);
+      const average =
+        held.reduce((sum, sample) => sum + sample * sample, 0) / held.length;
+      assert.ok(average > 0.00001, `${instrument} remains audible`);
+      assert.ok(Math.abs(samples.at(-1)) < 0.0001);
+    }
+  }
 });

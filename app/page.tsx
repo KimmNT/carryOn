@@ -44,7 +44,6 @@ import {
   replaceRecordedChord,
   createKeyGate,
   synthesize,
-  SOUND_VERSION,
   takeLength,
   trimAudio,
   playbackPosition,
@@ -52,9 +51,12 @@ import {
   encodeWav,
   clampTrackStart,
   createNoteKeyGate,
+  CHORD_RELEASE_SECONDS,
+  heldChordPartials,
   midiNoteAt,
   noteLabel,
   NOTE_KEY_LABELS,
+  NOTE_KEY_CODES,
   type Hit,
   type Pad,
   type Instrument,
@@ -243,8 +245,6 @@ export default function Home() {
     [playMode, setPlayMode] = useState<'chords' | 'notes'>('chords'),
     [baseOctave, setBaseOctave] = useState(3),
     [instrument, setInstrument] = useState<Instrument>('piano'),
-    [duration, setDuration] = useState(2.4),
-    [volume, setVolume] = useState(0.7),
     [selected, setSelected] = useState(0),
     [active, setActive] = useState<number[]>([]),
     [mode, setMode] = useState<'idle' | 'countin' | 'recording' | 'playing'>(
@@ -264,6 +264,7 @@ export default function Home() {
     [status, setStatus] = useState('Ready when you are'),
     [exporting, setExporting] = useState(false);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const volume = 0.7;
   const [tab, setTab] = useState<'record' | 'session'>('record');
   const [sessionLength, setSessionLength] = useState(10);
   const [takeName, setTakeName] = useState('');
@@ -477,20 +478,35 @@ export default function Home() {
     pcm: Float32Array;
   } | null>(null);
   const playbackRange = useRef({ offset: 0, duration: 0, loop: false });
-  const buffers = useRef(new Map<string, AudioBuffer>());
+  const heldChords = useRef(
+    new Map<
+      number,
+      {
+        gain: GainNode;
+        voices: OscillatorNode[];
+        startedAt: number;
+        hit: Hit;
+      }
+    >(),
+  );
+  const pendingChords = useRef(
+    new Map<number, { pressedAt: number; releasedAt?: number }>(),
+  );
   const audio = useRef<AudioContext | null>(null),
-    sources = useRef(new Set<AudioBufferSourceNode>()),
+    sources = useRef(new Set<AudioScheduledSourceNode>()),
     recording = useRef(false),
     start = useRef(0),
     recorded = useRef<Hit[]>([]),
     endTime = useRef(0),
     modeRef = useRef(mode),
     playModeRef = useRef(playMode),
-    settings = useRef({ pads, instrument, duration, volume, baseOctave }),
+    settings = useRef({ pads, instrument, volume, baseOctave }),
     triggerRef = useRef<(i: number) => void>(() => {}),
+    releaseChordRef = useRef<(i: number) => void>(() => {}),
+    releaseAllChordsRef = useRef<() => void>(() => {}),
     noteTriggerRef = useRef<(i: number) => void>(() => {}),
     stopRef = useRef(() => {});
-  settings.current = { pads, instrument, duration, volume, baseOctave };
+  settings.current = { pads, instrument, volume, baseOctave };
   modeRef.current = mode;
   playModeRef.current = playMode;
   async function unlock() {
@@ -506,26 +522,10 @@ export default function Home() {
       } catch {}
     });
     sources.current.clear();
+    heldChords.current.forEach(({ gain }) => gain.disconnect());
+    heldChords.current.clear();
+    pendingChords.current.clear();
     setActive([]);
-  }
-  function prepareHit(ctx: AudioContext, h: Hit) {
-    const key = JSON.stringify([
-      SOUND_VERSION,
-      ctx.sampleRate,
-      h.notes,
-      h.instrument,
-      h.duration,
-      h.volume,
-    ]);
-    const cached = buffers.current.get(key);
-    if (cached) return cached;
-    const pcm = synthesize(h, ctx.sampleRate),
-      buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
-    buffer.getChannelData(0).set(pcm);
-    if (buffers.current.size >= 64)
-      buffers.current.delete(buffers.current.keys().next().value!);
-    buffers.current.set(key, buffer);
-    return buffer;
   }
   function playBuffer(
     ctx: AudioContext,
@@ -547,75 +547,151 @@ export default function Home() {
     s.start(when);
   }
 
-  async function trigger(i: number) {
+  async function playHeld(i: number, snapshot: Hit) {
     if (modeRef.current === 'playing' || modeRef.current === 'countin') return;
-    const s = settings.current,
-      p = s.pads[i];
+    if (pendingChords.current.has(i)) return;
+    const s = settings.current;
+    const pending = {
+      pressedAt: performance.now(),
+      releasedAt: undefined as number | undefined,
+    };
+    pendingChords.current.set(i, pending);
+    setActive((active) => [...new Set([...active, i])]);
+    try {
+      const ctx = await unlock();
+      if (
+        pendingChords.current.get(i) !== pending ||
+        (modeRef.current as string) === 'playing' ||
+        (modeRef.current as string) === 'countin'
+      )
+        return;
+      const when = ctx.currentTime + 0.012;
+      snapshot.time = recording.current ? Math.max(0, when - start.current) : 0;
+      const gain = ctx.createGain();
+      const attack = s.instrument === 'organ' ? 0.045 : 0.008;
+      gain.gain.setValueAtTime(0, when);
+      gain.gain.linearRampToValueAtTime(0.055 * s.volume, when + attack);
+      gain.connect(ctx.destination);
+      const partials = heldChordPartials(s.instrument);
+      const real = new Float32Array(partials.length + 1);
+      const imaginary = new Float32Array(partials.length + 1);
+      partials.forEach((amplitude, index) => {
+        imaginary[index + 1] = amplitude;
+      });
+      const wave = ctx.createPeriodicWave(real, imaginary, {
+        disableNormalization: true,
+      });
+      const voices = snapshot.notes.map((note, index) => {
+        const oscillator = ctx.createOscillator();
+        oscillator.setPeriodicWave(wave);
+        oscillator.frequency.value = 440 * 2 ** ((note - 69) / 12);
+        oscillator.connect(gain);
+        sources.current.add(oscillator);
+        oscillator.onended = () => {
+          sources.current.delete(oscillator);
+          oscillator.disconnect();
+          if (voices.every((voice) => !sources.current.has(voice)))
+            gain.disconnect();
+        };
+        oscillator.start(
+          when + (s.instrument === 'guitar' ? index * 0.026 : 0),
+        );
+        return oscillator;
+      });
+      heldChords.current.set(i, {
+        gain,
+        voices,
+        startedAt: when,
+        hit: snapshot,
+      });
+      if (recording.current) {
+        recorded.current.push(snapshot);
+        setHits([...recorded.current]);
+      }
+      setStatus(`${snapshot.label} · ${s.instrument}`);
+      if (pending.releasedAt !== undefined)
+        releaseChord(
+          i,
+          Math.max(0.02, (pending.releasedAt - pending.pressedAt) / 1000),
+        );
+    } catch {
+      pendingChords.current.delete(i);
+      setActive((active) => active.filter((key) => key !== i));
+      setStatus('Audio could not start. Try playing the key again.');
+    }
+  }
+  function trigger(i: number) {
+    const s = settings.current;
+    const p = s.pads[i];
     if (!p || p.quality === 'off') return;
-    const snapshot: Hit = {
+    void playHeld(i, {
       pad: i,
       time: 0,
       chord: { ...p },
       notes: chordNotes(p),
       label: chordLabel(p),
       instrument: s.instrument,
-      duration: s.duration,
+      duration: CHORD_RELEASE_SECONDS + 0.02,
+      heldFor: 0.02,
       volume: s.volume,
-    };
-    try {
-      const ctx = await unlock();
-      if ((modeRef.current as string) === 'playing') return;
-      const buffer = prepareHit(ctx, snapshot);
-      const when = ctx.currentTime + 0.012;
-      snapshot.time = recording.current ? Math.max(0, when - start.current) : 0;
-      playBuffer(ctx, buffer, when);
-      if (recording.current) {
-        recorded.current.push(snapshot);
-        setHits([...recorded.current]);
-      }
-      setActive((a) => [...new Set([...a, i])]);
-      setTimeout(() => setActive((a) => a.filter((n) => n !== i)), 180);
-      setStatus(`${snapshot.label} · ${s.instrument}`);
-    } catch {
-      setStatus('Audio could not start. Try clicking a pad again.');
-    }
+    });
   }
   triggerRef.current = (i) => {
     void trigger(i);
   };
-  async function triggerNote(i: number) {
-    if (modeRef.current === 'playing' || modeRef.current === 'countin') return;
+  function releaseChord(i: number, measuredHold?: number) {
+    const pending = pendingChords.current.get(i);
+    const held = heldChords.current.get(i);
+    if (!held) {
+      if (pending) pending.releasedAt = performance.now();
+      setActive((active) => active.filter((key) => key !== i));
+      return;
+    }
+    pendingChords.current.delete(i);
+    heldChords.current.delete(i);
+    const ctx = audio.current;
+    if (!ctx) return;
+    const releasedAt = Math.max(
+      ctx.currentTime,
+      held.startedAt + (measuredHold ?? 0.02),
+    );
+    const heldFor = releasedAt - held.startedAt;
+    held.hit.heldFor = heldFor;
+    held.hit.duration = heldFor + CHORD_RELEASE_SECONDS;
+    held.gain.gain.cancelAndHoldAtTime(releasedAt);
+    held.gain.gain.linearRampToValueAtTime(
+      0,
+      releasedAt + CHORD_RELEASE_SECONDS,
+    );
+    held.voices.forEach((voice) => {
+      try {
+        voice.stop(releasedAt + CHORD_RELEASE_SECONDS);
+      } catch {}
+    });
+    setActive((active) => active.filter((key) => key !== i));
+    if (recording.current) {
+      setHits([...recorded.current]);
+      takeCache.current = null;
+    }
+  }
+  releaseChordRef.current = releaseChord;
+  releaseAllChordsRef.current = () => {
+    [...heldChords.current.keys()].forEach(releaseChord);
+    pendingChords.current.clear();
+  };
+  function triggerNote(i: number) {
     const s = settings.current;
     const midi = midiNoteAt(i, s.baseOctave);
-    const snapshot: Hit = {
+    void playHeld(i, {
       pad: i,
       time: 0,
       notes: [midi],
       label: noteLabel(midi),
       instrument: s.instrument,
-      duration: s.duration,
+      duration: CHORD_RELEASE_SECONDS + 0.02,
+      heldFor: 0.02,
       volume: s.volume,
-    };
-    try {
-      const ctx = await unlock();
-      if ((modeRef.current as string) === 'playing') return;
-      const buffer = prepareHit(ctx, snapshot);
-      const when = ctx.currentTime + 0.012;
-      snapshot.time = recording.current ? Math.max(0, when - start.current) : 0;
-      playBuffer(ctx, buffer, when);
-      if (recording.current) {
-        recorded.current.push(snapshot);
-        setHits([...recorded.current]);
-      }
-      setActive((current) => [...new Set([...current, i])]);
-      setTimeout(
-        () => setActive((current) => current.filter((key) => key !== i)),
-        180,
-      );
-      setStatus(`${snapshot.label} · ${s.instrument}`);
-    } catch {
-      setStatus('Audio could not start. Try playing the note again.');
-    }
+    });
   }
   noteTriggerRef.current = (i) => {
     void triggerNote(i);
@@ -626,6 +702,7 @@ export default function Home() {
     if (modeRef.current === 'countin')
       setStatus('Count-in cancelled · existing take kept');
     if (recording.current) {
+      releaseAllChordsRef.current();
       recording.current = false;
       const elapsed = Math.max(
         0,
@@ -638,8 +715,8 @@ export default function Home() {
       silence();
       setStatus(
         recorded.current.length
-          ? 'Take ready · chord tails preserved'
-          : 'No chords recorded. Press Record to try again.',
+          ? 'Take ready · release tails preserved'
+          : 'No sounds recorded. Press Record to try again.',
       );
     } else if (modeRef.current === 'playing') {
       silence();
@@ -678,7 +755,7 @@ export default function Home() {
       recording.current = true;
       modeRef.current = 'recording';
       setMode('recording');
-      setStatus('Recording · play your chords');
+      setStatus(`Recording · play your ${playModeRef.current}`);
     } catch {
       if (token !== countInToken.current) return;
       setCountdown(null);
@@ -859,10 +936,18 @@ export default function Home() {
     const up = (e: KeyboardEvent) => {
       chordGate.up(e.code);
       noteGate.up(e.code);
+      const index =
+        playModeRef.current === 'notes'
+          ? NOTE_KEY_CODES.indexOf(e.code as (typeof NOTE_KEY_CODES)[number])
+          : /^Digit[0-9]$/.test(e.code)
+            ? (Number(e.code.slice(-1)) + 9) % 10
+            : -1;
+      if (index >= 0) releaseChordRef.current(index);
     };
     const blur = () => {
       chordGate.clear();
       noteGate.clear();
+      releaseAllChordsRef.current();
     };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
@@ -994,12 +1079,13 @@ export default function Home() {
   }, []);
   const scale = mode === 'recording' ? Math.max(8, clock + 2) : length || 8,
     chosen = pads[selected],
-    recordedKind =
-      hits.length && hits.some((hit) => !hit.chord)
+    recordedKind = hits.length
+      ? hits.some((hit) => !hit.chord)
         ? 'note'
-        : playMode === 'notes'
-          ? 'note'
-          : 'chord';
+        : 'chord'
+      : playMode === 'notes'
+        ? 'note'
+        : 'chord';
   const timelineWidth = Math.max(960, Math.min(18000, mixLength * 22));
   const timelineTicks = Array.from({ length: 11 }, (_, index) => {
     const seconds = (mixLength * index) / 10;
@@ -1027,13 +1113,13 @@ export default function Home() {
             <p className="intro">
               {playMode === 'chords' ? (
                 <>
-                  Press <kbd>1</kbd> through <kbd>0</kbd> or tap a pad. Every
-                  press plays one complete chord.
+                  Hold <kbd>1</kbd> through <kbd>0</kbd> or hold a pad to
+                  sustain its chord. Release to end it.
                 </>
               ) : (
                 <>
-                  Play the 25-key controller on screen or from your computer
-                  keyboard.
+                  Hold a piano key on screen or its computer shortcut. Release
+                  to end the note.
                 </>
               )}
             </p>
@@ -1077,67 +1163,37 @@ export default function Home() {
               />
               <small>
                 {instrument === 'piano'
-                  ? 'Soft hammer · decaying strings'
+                  ? 'Soft attack · sustained tone'
                   : instrument === 'guitar'
-                    ? 'Plucked strings · gentle strum'
+                    ? 'Bright strings · gentle strum'
                     : 'Warm drawbars · sustained tone'}
                 <br />
                 Synthesized approximation
               </small>
             </div>
-            <div className="field duration">
-              <label>
-                {playMode === 'chords' ? 'Chord' : 'Note'} duration{' '}
-                <b>{duration.toFixed(1)} s</b>
-              </label>
-              <Slider
-                aria-label={`${playMode === 'chords' ? 'Chord' : 'Note'} duration`}
-                min={0.4}
-                max={5}
-                step={0.1}
-                value={[duration]}
-                onValueChange={(v) => setDuration(Array.isArray(v) ? v[0] : v)}
-              />
-              <small>Plays out after you release the key</small>
-            </div>
-            <div className="field volume">
-              <label>
-                Volume <b>{Math.round(volume * 100)}%</b>
-              </label>
-              <Slider
-                aria-label="Volume"
-                min={0}
-                max={1}
-                step={0.01}
-                value={[volume]}
-                onValueChange={(v) => setVolume(Array.isArray(v) ? v[0] : v)}
-              />
-            </div>
-          </section>
-          <div className="play-mode-bar">
-            <div>
-              <span>Play mode</span>
+            <div className="soundbar-play-mode">
+              <span className="play-mode-label">Play mode</span>
               <fieldset className="play-mode-switch" aria-label="Play mode">
                 <button
                   aria-pressed={playMode === 'chords'}
-                  disabled={mode !== 'idle'}
+                  disabled={mode !== 'idle' || active.length > 0}
                   onClick={() => setPlayMode('chords')}
                 >
                   Chords
                 </button>
                 <button
                   aria-pressed={playMode === 'notes'}
-                  disabled={mode !== 'idle'}
+                  disabled={mode !== 'idle' || active.length > 0}
                   onClick={() => setPlayMode('notes')}
                 >
                   Notes
                 </button>
               </fieldset>
+              <small className="keyboard-note">
+                <Keyboard size={15} /> Computer keyboard ready
+              </small>
             </div>
-            <span className="keyboard-note">
-              <Keyboard size={16} /> Computer keyboard ready
-            </span>
-          </div>
+          </section>
           <div className="section-heading">
             <h2>
               {playMode === 'chords' ? (
@@ -1163,7 +1219,26 @@ export default function Home() {
                     <button
                       className="pad"
                       disabled={mode === 'playing' || p.quality === 'off'}
-                      onClick={() => triggerRef.current(i)}
+                      onPointerDown={(event) => {
+                        if (event.button !== 0) return;
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        triggerRef.current(i);
+                      }}
+                      onPointerUp={() => releaseChordRef.current(i)}
+                      onPointerCancel={() => releaseChordRef.current(i)}
+                      onLostPointerCapture={() => releaseChordRef.current(i)}
+                      onKeyDown={(event) => {
+                        if (event.code !== 'Space' && event.code !== 'Enter')
+                          return;
+                        event.preventDefault();
+                        if (!event.repeat) triggerRef.current(i);
+                      }}
+                      onKeyUp={(event) => {
+                        if (event.code !== 'Space' && event.code !== 'Enter')
+                          return;
+                        event.preventDefault();
+                        releaseChordRef.current(i);
+                      }}
                       aria-label={`Play ${chordLabel(p)}, key ${KEYS[i]}`}
                     >
                       <span className="pad-top">
@@ -1272,7 +1347,32 @@ export default function Home() {
                           width: `${100 / NOTE_WHITE_COUNT}%`,
                         }}
                         disabled={mode === 'playing' || mode === 'countin'}
-                        onClick={() => noteTriggerRef.current(key.index)}
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
+                          event.currentTarget.setPointerCapture(
+                            event.pointerId,
+                          );
+                          noteTriggerRef.current(key.index);
+                        }}
+                        onPointerUp={() => releaseChordRef.current(key.index)}
+                        onPointerCancel={() =>
+                          releaseChordRef.current(key.index)
+                        }
+                        onLostPointerCapture={() =>
+                          releaseChordRef.current(key.index)
+                        }
+                        onKeyDown={(event) => {
+                          if (event.code !== 'Space' && event.code !== 'Enter')
+                            return;
+                          event.preventDefault();
+                          if (!event.repeat) noteTriggerRef.current(key.index);
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.code !== 'Space' && event.code !== 'Enter')
+                            return;
+                          event.preventDefault();
+                          releaseChordRef.current(key.index);
+                        }}
                         aria-label={`Play ${noteLabel(midi)}, key ${key.shortcut}`}
                       >
                         <kbd>{key.shortcut}</kbd>
@@ -1291,7 +1391,32 @@ export default function Home() {
                           width: '4.3%',
                         }}
                         disabled={mode === 'playing' || mode === 'countin'}
-                        onClick={() => noteTriggerRef.current(key.index)}
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
+                          event.currentTarget.setPointerCapture(
+                            event.pointerId,
+                          );
+                          noteTriggerRef.current(key.index);
+                        }}
+                        onPointerUp={() => releaseChordRef.current(key.index)}
+                        onPointerCancel={() =>
+                          releaseChordRef.current(key.index)
+                        }
+                        onLostPointerCapture={() =>
+                          releaseChordRef.current(key.index)
+                        }
+                        onKeyDown={(event) => {
+                          if (event.code !== 'Space' && event.code !== 'Enter')
+                            return;
+                          event.preventDefault();
+                          if (!event.repeat) noteTriggerRef.current(key.index);
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.code !== 'Space' && event.code !== 'Enter')
+                            return;
+                          event.preventDefault();
+                          releaseChordRef.current(key.index);
+                        }}
                         aria-label={`Play ${noteLabel(midi)}, key ${key.shortcut}`}
                       >
                         <kbd>{key.shortcut}</kbd>

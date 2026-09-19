@@ -218,20 +218,6 @@ h1 {
 .instrument .choice {
   margin-top: -4px;
 }
-.duration {
-  width: 285px;
-  border-left: 1px solid #364033;
-  padding-left: 28px;
-}
-.volume {
-  width: 190px;
-  margin-left: auto;
-  align-self: flex-start;
-  padding-top: 2px;
-}
-.volume [data-slot='slider'] {
-  margin-top: 7px;
-}
 .section-heading {
   display: flex;
   align-items: center;
@@ -258,21 +244,16 @@ h2 {
   font-size: 12px;
   color: #a0ada3;
 }
-.play-mode-bar {
+.soundbar-play-mode {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 22px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  margin-left: auto;
 }
-.play-mode-bar > div > span {
-  display: block;
-  margin-bottom: 7px;
-  color: #8e9b91;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 1.1px;
-  text-transform: uppercase;
+.play-mode-label {
+  color: #bac3bb;
+  font-size: 13px;
 }
 .play-mode-switch {
   display: inline-flex;
@@ -295,6 +276,10 @@ h2 {
 .play-mode-switch button[aria-pressed='true'] {
   background: #35462c;
   color: #c9ff96;
+}
+.soundbar-play-mode .keyboard-note {
+  margin-top: 1px;
+  font-size: 11px;
 }
 .note-controller {
   margin-bottom: 24px;
@@ -759,14 +744,8 @@ footer > span:first-child {
   .instrument {
     width: calc(50% - 10px);
   }
-  .duration {
-    width: calc(50% - 10px);
-    padding: 0;
-    border: 0;
-  }
-  .volume {
-    width: 100%;
-    margin: 0;
+  .soundbar-play-mode {
+    margin-left: auto;
   }
   .title-row {
     margin-bottom: 23px;
@@ -815,9 +794,12 @@ footer > span:first-child {
     padding: 17px;
     gap: 20px;
   }
-  .instrument,
-  .duration {
+  .instrument {
     width: 100%;
+  }
+  .soundbar-play-mode {
+    width: 100%;
+    margin-left: 0;
   }
   .intro {
     line-height: 1.8;
@@ -825,7 +807,6 @@ footer > span:first-child {
   .keyboard-note {
     font-size: 11px;
   }
-  .play-mode-bar,
   .octave-bar,
   .note-shortcuts {
     align-items: flex-start;

@@ -2,6 +2,8 @@ export type Instrument = 'piano' | 'guitar' | 'organ';
 export type Pad = { root: number; quality: string; bass?: string };
 export type Hit = {
   chord?: Pad;
+  /** Seconds the player held a chord before its release tail. */
+  heldFor?: number;
   pad: number;
   time: number;
   notes: number[];
@@ -280,7 +282,60 @@ export function createKeyGate() {
 }
 // The live player and WAV renderer use the same deterministic PCM synthesis.
 export const SOUND_VERSION = 3;
+export const CHORD_RELEASE_SECONDS = 0.16;
+export function heldChordPartials(instrument: Instrument): number[] {
+  return instrument === 'organ'
+    ? [1, 0.22, 0.075, 0.025]
+    : instrument === 'piano'
+      ? [1, 0.3, 0.105, 0.035, 0.012]
+      : [1, 0.4, 0.16, 0.07];
+}
+function synthesizeHeldChord(hit: Hit, rate: number): Float32Array {
+  const data = new Float32Array(Math.ceil(hit.duration * rate));
+  const heldFor = Math.max(0.02, hit.heldFor ?? 0.02);
+  const partials = heldChordPartials(hit.instrument);
+  const attack = hit.instrument === 'organ' ? 0.045 : 0.008;
+  for (let n = 0; n < hit.notes.length; n++) {
+    const frequency = 440 * 2 ** ((hit.notes[n] - 69) / 12);
+    const delay = hit.instrument === 'guitar' ? n * 0.026 : 0;
+    const phase = partials.map((_, harmonic) => {
+      const step = (2 * Math.PI * frequency * (harmonic + 1)) / rate;
+      return {
+        real: 1,
+        imaginary: 0,
+        cosine: Math.cos(step),
+        sine: Math.sin(step),
+      };
+    });
+    for (let i = Math.ceil(delay * rate); i < data.length; i++) {
+      const time = i / rate - delay;
+      const release = Math.min(
+        1,
+        Math.max(
+          0,
+          (heldFor + CHORD_RELEASE_SECONDS - i / rate) / CHORD_RELEASE_SECONDS,
+        ),
+      );
+      let wave = 0;
+      for (let harmonic = 0; harmonic < partials.length; harmonic++) {
+        const oscillator = phase[harmonic];
+        wave += partials[harmonic] * oscillator.imaginary;
+        const nextReal =
+          oscillator.real * oscillator.cosine -
+          oscillator.imaginary * oscillator.sine;
+        oscillator.imaginary =
+          oscillator.imaginary * oscillator.cosine +
+          oscillator.real * oscillator.sine;
+        oscillator.real = nextReal;
+      }
+      data[i] +=
+        wave * Math.min(1, time / attack) * release * 0.055 * hit.volume;
+    }
+  }
+  return data;
+}
 export function synthesize(hit: Hit, rate: number): Float32Array {
+  if (hit.heldFor !== undefined) return synthesizeHeldChord(hit, rate);
   const data = new Float32Array(Math.ceil(hit.duration * rate));
   for (let n = 0; n < hit.notes.length; n++) {
     const f = 440 * 2 ** ((hit.notes[n] - 69) / 12);
