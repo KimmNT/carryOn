@@ -550,6 +550,99 @@ h2 {
   background: #191e1a;
   padding: 21px 23px 0;
 }
+.session-monitor {
+  margin: 0 0 22px;
+  padding: 18px 22px;
+  border: 1px solid #42543d;
+  border-radius: 14px;
+  background: #1b251c;
+}
+.session-monitor-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+.session-monitor-heading h2 {
+  margin: 3px 0 5px;
+  font-size: 17px;
+}
+.session-monitor-heading p:not(.eyebrow),
+.session-monitor-hint {
+  margin: 0;
+  color: #a6b5a4;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.session-monitor-time {
+  flex: none;
+  color: #c9f7a0;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.session-monitor-slider {
+  padding: 14px 0;
+}
+.session-monitor-slider [data-slot='slider-track'] {
+  height: 7px;
+  background: #384839;
+}
+.session-monitor-slider [data-slot='slider-thumb'] {
+  width: 15px;
+  height: 21px;
+  border: 2px solid #1b251c;
+  border-radius: 5px;
+  background: #b9fa73;
+  box-shadow: 0 0 0 1px #b9fa73;
+}
+.session-monitor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 10px;
+}
+.session-monitor-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid #53664c;
+  border-radius: 7px;
+  background: #2a3829;
+  color: #e5efdf;
+  font-size: 12px;
+}
+.session-monitor-actions button:first-child {
+  border-color: #88b95e;
+  color: #cdfca5;
+}
+.session-monitor-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.session-monitor-actions .session-monitor-toggle {
+  margin-left: auto;
+  border-color: #3d4c3e;
+  background: #202a21;
+}
+.session-monitor-toggle[aria-pressed='true'] .toggle-light {
+  background: #6f973f;
+}
+.session-monitor-toggle[aria-pressed='true'] .toggle-light::after {
+  transform: translateX(12px);
+  background: #c8ff94;
+}
+@media (max-width: 620px) {
+  .session-monitor-heading {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .session-monitor-actions .session-monitor-toggle {
+    margin-left: 0;
+  }
+}
 .recorder-head {
   display: flex;
   justify-content: space-between;

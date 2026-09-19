@@ -74,6 +74,14 @@ test('held notes and chords remain audible until release and fade afterward', ()
       const average =
         held.reduce((sum, sample) => sum + sample * sample, 0) / held.length;
       assert.ok(average > 0.00001, `${instrument} remains audible`);
+      const release = samples.subarray(
+        Math.floor((heldFor + 0.17) * 44100),
+        Math.floor((heldFor + 0.23) * 44100),
+      );
+      const releaseEnergy =
+        release.reduce((sum, sample) => sum + sample * sample, 0) /
+        release.length;
+      assert.ok(releaseEnergy > 0.000005, `${instrument} has a soft tail`);
       assert.ok(Math.abs(samples.at(-1)) < 0.0001);
     }
   }

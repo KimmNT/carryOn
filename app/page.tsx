@@ -269,6 +269,10 @@ export default function Home() {
   const [sessionLength, setSessionLength] = useState(10);
   const [takeName, setTakeName] = useState('');
   const [storageReady, setStorageReady] = useState(false);
+  const [sessionCursor, setSessionCursor] = useState(0);
+  const [scrubbingSession, setScrubbingSession] = useState(false);
+  const [hearSessionWhileRecording, setHearSessionWhileRecording] =
+    useState(true);
   const [draggingTrack, setDraggingTrack] = useState<number | null>(null);
   const drag = useRef<{
     index: number;
@@ -477,7 +481,13 @@ export default function Home() {
     rate: number;
     pcm: Float32Array;
   } | null>(null);
-  const playbackRange = useRef({ offset: 0, duration: 0, loop: false });
+  const playbackRange = useRef({
+    offset: 0,
+    duration: 0,
+    startOffset: 0,
+    loop: false,
+    all: false,
+  });
   const heldChords = useRef(
     new Map<
       number,
@@ -532,6 +542,7 @@ export default function Home() {
     buffer: AudioBuffer,
     when: number,
     loop = false,
+    offset = 0,
   ) {
     const s = ctx.createBufferSource();
     s.buffer = buffer;
@@ -544,7 +555,7 @@ export default function Home() {
       sources.current.delete(s);
       s.disconnect();
     };
-    s.start(when);
+    s.start(when, offset);
   }
 
   async function playHeld(i: number, snapshot: Hit) {
@@ -728,13 +739,27 @@ export default function Home() {
   }
   stopRef.current = stop;
   async function record() {
-    if (modeRef.current !== 'idle' || exporting) return;
+    if (
+      (modeRef.current !== 'idle' &&
+        !(modeRef.current === 'playing' && playbackRange.current.all)) ||
+      exporting
+    )
+      return;
     const token = ++countInToken.current;
     modeRef.current = 'countin';
     setMode('countin');
     try {
       const ctx = await unlock();
       silence();
+      const sessionPcm =
+        hearSessionWhileRecording && hasMix
+          ? mixTracks(currentTracks, ctx.sampleRate, mixLength)
+          : null;
+      const sessionBuffer = sessionPcm
+        ? ctx.createBuffer(1, sessionPcm.length, ctx.sampleRate)
+        : null;
+      if (sessionBuffer && sessionPcm)
+        sessionBuffer.getChannelData(0).set(sessionPcm);
       for (let n = 4; n >= 1; n--) {
         if (token !== countInToken.current) return;
         setCountdown(n);
@@ -752,10 +777,15 @@ export default function Home() {
       takeCache.current = null;
       setClock(0);
       start.current = ctx.currentTime + 0.06;
+      if (sessionBuffer) playBuffer(ctx, sessionBuffer, start.current);
       recording.current = true;
       modeRef.current = 'recording';
       setMode('recording');
-      setStatus(`Recording · play your ${playModeRef.current}`);
+      setStatus(
+        sessionBuffer
+          ? `Recording with Session · play your ${playModeRef.current}`
+          : `Recording · play your ${playModeRef.current}`,
+      );
     } catch {
       if (token !== countInToken.current) return;
       setCountdown(null);
@@ -801,7 +831,7 @@ export default function Home() {
     }
     return trimAudio(cached.pcm, rate, trim[0], trim[1]);
   }
-  async function replay(loop = false, all = false, solo?: Track) {
+  async function replay(loop = false, all = false, solo?: Track, seekAt = 0) {
     try {
       const ctx = await unlock();
       silence();
@@ -814,23 +844,33 @@ export default function Home() {
         : selectionAudio(ctx.sampleRate);
       const buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
       buffer.getChannelData(0).set(pcm);
+      const startOffset = all
+        ? Math.max(
+            0,
+            Math.min(seekAt, Math.max(0, buffer.duration - 1 / ctx.sampleRate)),
+          )
+        : 0;
       // Prepare the selected audio before starting the playback clock.
       start.current = ctx.currentTime + 0.06;
       playbackRange.current = {
         offset: all ? 0 : trim[0],
         duration: buffer.duration,
+        startOffset,
         loop,
+        all,
       };
-      endTime.current = start.current + buffer.duration;
-      playBuffer(ctx, buffer, start.current, loop);
-      setClock(0);
+      endTime.current = start.current + buffer.duration - startOffset;
+      playBuffer(ctx, buffer, start.current, loop, startOffset);
+      setClock(startOffset);
       modeRef.current = 'playing';
       setMode('playing');
       setStatus(
         all
           ? loop
             ? 'Looping all tracks'
-            : 'Playing all tracks'
+            : startOffset > 0
+              ? `Playing Session from ${fmt(startOffset)}`
+              : 'Playing all tracks'
           : loop
             ? 'Looping selected range · press Stop to finish'
             : isTrimmed
@@ -839,6 +879,9 @@ export default function Home() {
       );
     } catch {
       silence();
+      modeRef.current = 'idle';
+      setMode('idle');
+      setClock(0);
       setStatus('Playback could not start.');
     }
   }
@@ -973,7 +1016,7 @@ export default function Home() {
       const position =
         mode === 'playing'
           ? playbackPosition(
-              t,
+              t + playbackRange.current.startOffset,
               playbackRange.current.duration,
               playbackRange.current.loop,
             )
@@ -985,13 +1028,16 @@ export default function Home() {
       }
       if (mode === 'playing') {
         setActive(
-          hits
-            .filter(
-              (h) =>
-                position + playbackRange.current.offset >= h.time &&
-                t + playbackRange.current.offset < h.time + h.duration,
-            )
-            .map((h) => h.pad),
+          playbackRange.current.all
+            ? []
+            : hits
+                .filter(
+                  (h) =>
+                    position + playbackRange.current.offset >= h.time &&
+                    position + playbackRange.current.offset <
+                      h.time + h.duration,
+                )
+                .map((h) => h.pad),
         );
         if (!playbackRange.current.loop && ctx.currentTime >= endTime.current) {
           setMode('idle');
@@ -1432,6 +1478,103 @@ export default function Home() {
               </p>
             </section>
           )}
+          {tracks.length > 0 && (
+            <section className="session-monitor" aria-label="Listen to Session">
+              <div className="session-monitor-heading">
+                <div>
+                  <p className="eyebrow">PLAY ALONG</p>
+                  <h2>Hear your Session</h2>
+                  <p>
+                    Listen to the current arrangement here, with its track
+                    positions, loops, mutes, and solos.
+                  </p>
+                </div>
+                <span className="session-monitor-time">
+                  {fmt(
+                    Math.min(
+                      mixLength,
+                      mode === 'recording' && hearSessionWhileRecording
+                        ? clock
+                        : mode === 'playing' &&
+                            playbackRange.current.all &&
+                            !scrubbingSession
+                          ? clock
+                          : Math.min(sessionCursor, mixLength),
+                    ),
+                  )}{' '}
+                  / {fmt(mixLength)}
+                </span>
+              </div>
+              <Slider
+                className="session-monitor-slider"
+                aria-label="Session listening position"
+                min={0}
+                max={mixLength}
+                step={0.01}
+                value={[
+                  mode === 'playing' &&
+                  playbackRange.current.all &&
+                  !scrubbingSession
+                    ? clock
+                    : Math.min(sessionCursor, mixLength),
+                ]}
+                disabled={!hasMix || mode === 'countin' || mode === 'recording'}
+                onValueChange={(value) => {
+                  if (Array.isArray(value)) {
+                    setScrubbingSession(true);
+                    setSessionCursor(value[0]);
+                  }
+                }}
+                onValueCommitted={(value) => {
+                  if (!Array.isArray(value)) return;
+                  setScrubbingSession(false);
+                  setSessionCursor(value[0]);
+                  if (
+                    modeRef.current === 'playing' &&
+                    playbackRange.current.all
+                  )
+                    void replay(false, true, undefined, value[0]);
+                }}
+              />
+              <div className="session-monitor-actions">
+                <button
+                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  onClick={() =>
+                    replay(
+                      false,
+                      true,
+                      undefined,
+                      Math.min(sessionCursor, mixLength),
+                    )
+                  }
+                >
+                  <Play size={15} fill="currentColor" /> Listen from here
+                </button>
+                <button
+                  disabled={mode !== 'playing' || !playbackRange.current.all}
+                  onClick={stop}
+                >
+                  <Square size={14} fill="currentColor" /> Stop
+                </button>
+                <button
+                  className="session-monitor-toggle"
+                  aria-pressed={hearSessionWhileRecording}
+                  disabled={!hasMix || mode !== 'idle'}
+                  onClick={() =>
+                    setHearSessionWhileRecording((enabled) => !enabled)
+                  }
+                >
+                  <span className="toggle-light" aria-hidden="true" />
+                  Hear Session while recording
+                </button>
+              </div>
+              <p className="session-monitor-hint">
+                {hasMix
+                  ? 'After the four-count, recording and Session playback start together from the beginning.'
+                  : 'Unmute a saved take in Session to hear the arrangement here.'}
+              </p>
+            </section>
+          )}
           <section className="recorder" aria-label="Performance recorder">
             <div className="recorder-head">
               <div>
@@ -1445,9 +1588,11 @@ export default function Home() {
                   {mode === 'recording'
                     ? '● REC'
                     : mode === 'playing'
-                      ? playbackRange.current.loop
-                        ? '↻ LOOP'
-                        : '▶ PLAY'
+                      ? playbackRange.current.all
+                        ? '▶ SESSION'
+                        : playbackRange.current.loop
+                          ? '↻ LOOP'
+                          : '▶ PLAY'
                       : 'TAKE'}
                 </span>
                 {fmt(clock)}
@@ -1702,7 +1847,11 @@ export default function Home() {
               <div className="transport-buttons">
                 <button
                   className="record-button"
-                  disabled={mode !== 'idle' || exporting}
+                  disabled={
+                    (mode !== 'idle' &&
+                      !(mode === 'playing' && playbackRange.current.all)) ||
+                    exporting
+                  }
                   onClick={record}
                 >
                   <Circle size={15} fill="currentColor" />
