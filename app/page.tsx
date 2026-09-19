@@ -20,6 +20,7 @@ import {
   Trash2,
   Minus,
   Plus,
+  Timer,
 } from 'lucide-react';
 import {
   Select,
@@ -273,6 +274,9 @@ export default function Home() {
   const [scrubbingSession, setScrubbingSession] = useState(false);
   const [hearSessionWhileRecording, setHearSessionWhileRecording] =
     useState(true);
+  const [metronomeOn, setMetronomeOn] = useState(false);
+  const [tempo, setTempo] = useState(120);
+  const [tempoInput, setTempoInput] = useState('120');
   const [draggingTrack, setDraggingTrack] = useState<number | null>(null);
   const drag = useRef<{
     index: number;
@@ -502,6 +506,8 @@ export default function Home() {
   const pendingChords = useRef(
     new Map<number, { pressedAt: number; releasedAt?: number }>(),
   );
+  const metronomeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const metronomeVoices = useRef(new Set<OscillatorNode>());
   const audio = useRef<AudioContext | null>(null),
     sources = useRef(new Set<AudioScheduledSourceNode>()),
     recording = useRef(false),
@@ -556,6 +562,91 @@ export default function Home() {
       s.disconnect();
     };
     s.start(when, offset);
+  }
+  function stopMetronome() {
+    if (metronomeTimer.current !== null) {
+      clearInterval(metronomeTimer.current);
+      metronomeTimer.current = null;
+    }
+    metronomeVoices.current.forEach((voice) => {
+      try {
+        voice.stop();
+      } catch {}
+    });
+    metronomeVoices.current.clear();
+  }
+  function startMetronome(ctx: AudioContext, origin: number, bpm: number) {
+    stopMetronome();
+    const beatDuration = 60 / bpm;
+    let beatIndex = Math.max(
+      0,
+      Math.ceil((ctx.currentTime + 0.01 - origin) / beatDuration - 0.000001),
+    );
+    const schedule = () => {
+      beatIndex = Math.max(
+        beatIndex,
+        Math.ceil((ctx.currentTime - 0.005 - origin) / beatDuration),
+      );
+      while (origin + beatIndex * beatDuration < ctx.currentTime + 0.16) {
+        const beatAt = origin + beatIndex * beatDuration;
+        if (beatAt >= ctx.currentTime - 0.005) {
+          const when = Math.max(ctx.currentTime + 0.001, beatAt);
+          const accent = beatIndex % 4 === 0;
+          const voice = ctx.createOscillator();
+          const gain = ctx.createGain();
+          voice.type = 'triangle';
+          voice.frequency.setValueAtTime(accent ? 1250 : 900, when);
+          gain.gain.setValueAtTime(0, when);
+          gain.gain.linearRampToValueAtTime(
+            accent ? 0.13 : 0.085,
+            when + 0.002,
+          );
+          gain.gain.exponentialRampToValueAtTime(0.001, when + 0.055);
+          voice.connect(gain).connect(ctx.destination);
+          metronomeVoices.current.add(voice);
+          voice.onended = () => {
+            metronomeVoices.current.delete(voice);
+            voice.disconnect();
+            gain.disconnect();
+          };
+          voice.start(when);
+          voice.stop(when + 0.06);
+        }
+        beatIndex++;
+      }
+    };
+    schedule();
+    metronomeTimer.current = setInterval(schedule, 25);
+  }
+  async function toggleMetronome() {
+    if (metronomeOn) {
+      stopMetronome();
+      setMetronomeOn(false);
+      return;
+    }
+    try {
+      const ctx = await unlock();
+      const origin =
+        modeRef.current === 'recording'
+          ? start.current
+          : modeRef.current === 'playing'
+            ? start.current - playbackRange.current.startOffset
+            : ctx.currentTime + 0.06;
+      startMetronome(ctx, origin, tempo);
+      setMetronomeOn(true);
+    } catch {
+      setStatus('Metronome could not start. Try again.');
+    }
+  }
+  function changeTempo(value: string) {
+    setTempoInput(value);
+    const next = Number(value);
+    if (!value.trim() || !Number.isFinite(next) || next < 40 || next > 240)
+      return;
+    const bpm = Math.round(next);
+    setTempo(bpm);
+    if (metronomeOn && audio.current)
+      startMetronome(audio.current, audio.current.currentTime + 0.06, bpm);
   }
 
   async function playHeld(i: number, snapshot: Hit) {
@@ -760,11 +851,20 @@ export default function Home() {
         : null;
       if (sessionBuffer && sessionPcm)
         sessionBuffer.getChannelData(0).set(sessionPcm);
+      const beatDuration = metronomeOn ? 60 / tempo : 1;
+      const countStart = ctx.currentTime + 0.08;
+      if (metronomeOn) startMetronome(ctx, countStart, tempo);
       for (let n = 4; n >= 1; n--) {
         if (token !== countInToken.current) return;
         setCountdown(n);
         setStatus('Recording starts in ' + n);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const nextBeat = countStart + (5 - n) * beatDuration;
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            Math.max(0, (nextBeat - 0.025 - ctx.currentTime) * 1000),
+          ),
+        );
       }
       if (token !== countInToken.current) return;
       setCountdown(null);
@@ -776,7 +876,10 @@ export default function Home() {
       updateTrim(0, 0);
       takeCache.current = null;
       setClock(0);
-      start.current = ctx.currentTime + 0.06;
+      const downbeat = countStart + 4 * beatDuration;
+      start.current = Math.max(ctx.currentTime + 0.012, downbeat);
+      if (metronomeOn && start.current > downbeat + 0.02)
+        startMetronome(ctx, start.current, tempo);
       if (sessionBuffer) playBuffer(ctx, sessionBuffer, start.current);
       recording.current = true;
       modeRef.current = 'recording';
@@ -789,6 +892,7 @@ export default function Home() {
     } catch {
       if (token !== countInToken.current) return;
       setCountdown(null);
+      if (metronomeOn) stopMetronome();
       modeRef.current = 'idle';
       setMode('idle');
       setStatus('Audio unavailable. Try again.');
@@ -861,6 +965,7 @@ export default function Home() {
       };
       endTime.current = start.current + buffer.duration - startOffset;
       playBuffer(ctx, buffer, start.current, loop, startOffset);
+      if (metronomeOn) startMetronome(ctx, start.current - startOffset, tempo);
       setClock(startOffset);
       modeRef.current = 'playing';
       setMode('playing');
@@ -1000,6 +1105,14 @@ export default function Home() {
       window.removeEventListener('keyup', up);
       window.removeEventListener('blur', blur);
       countInToken.current++;
+      if (metronomeTimer.current !== null)
+        clearInterval(metronomeTimer.current);
+      metronomeVoices.current.forEach((voice) => {
+        try {
+          voice.stop();
+        } catch {}
+      });
+      metronomeVoices.current.clear();
       const context = audio.current;
       audio.current = null;
       sources.current.clear();
@@ -1185,7 +1298,11 @@ export default function Home() {
           <button
             aria-pressed={tab === 'session'}
             disabled={mode !== 'idle' || exporting}
-            onClick={() => setTab('session')}
+            onClick={() => {
+              stopMetronome();
+              setMetronomeOn(false);
+              setTab('session');
+            }}
           >
             Session · {tracks.length}
           </button>
@@ -1239,6 +1356,48 @@ export default function Home() {
                 <Keyboard size={15} /> Computer keyboard ready
               </small>
             </div>
+          </section>
+          <section className="metronome-panel" aria-label="Metronome">
+            <div className="metronome-heading">
+              <span className="metronome-icon">
+                <Timer size={19} />
+              </span>
+              <div>
+                <strong>Metronome</strong>
+                <small>
+                  Four beats per bar · click stays out of your takes
+                </small>
+              </div>
+            </div>
+            <label className="metronome-tempo">
+              Tempo
+              <span>
+                <Input
+                  aria-label="Metronome tempo in beats per minute"
+                  type="number"
+                  min={40}
+                  max={240}
+                  step={1}
+                  value={tempoInput}
+                  disabled={mode !== 'idle'}
+                  onChange={(event) => changeTempo(event.target.value)}
+                  onBlur={() => setTempoInput(String(tempo))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') event.currentTarget.blur();
+                  }}
+                />
+                BPM
+              </span>
+            </label>
+            <button
+              className="metronome-toggle"
+              aria-pressed={metronomeOn}
+              disabled={mode === 'countin'}
+              onClick={() => void toggleMetronome()}
+            >
+              <span className="toggle-light" aria-hidden="true" />
+              {metronomeOn ? 'Click on' : 'Start click'}
+            </button>
           </section>
           <div className="section-heading">
             <h2>
@@ -1603,7 +1762,11 @@ export default function Home() {
               <div className="count-in" role="status" aria-live="assertive">
                 <span>GET READY</span>
                 <strong key={countdown}>{countdown}</strong>
-                <small>Recording starts after 1 · Stop to cancel</small>
+                <small>
+                  {metronomeOn
+                    ? `Counting in at ${tempo} BPM · Stop to cancel`
+                    : 'Recording starts after 1 · Stop to cancel'}
+                </small>
               </div>
             )}
             <div className="timeline">

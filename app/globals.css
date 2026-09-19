@@ -171,6 +171,111 @@ h1 {
   padding: 20px 25px;
   margin-bottom: 28px;
 }
+.metronome-panel {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 13px 17px;
+  margin: -11px 0 25px;
+  border: 1px solid #3b4a39;
+  border-radius: 11px;
+  background: #1b241b;
+}
+.metronome-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  margin-right: auto;
+}
+.metronome-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 37px;
+  height: 37px;
+  border: 1px solid #4d6542;
+  border-radius: 8px;
+  color: #c2eb9d;
+  background: #2b3928;
+}
+.metronome-heading strong,
+.metronome-heading small {
+  display: block;
+}
+.metronome-heading strong {
+  color: #e5efdf;
+  font-size: 13px;
+  font-weight: 600;
+}
+.metronome-heading small {
+  margin-top: 3px;
+  color: #96a892;
+  font-size: 11px;
+}
+.metronome-tempo {
+  flex: none;
+  color: #b5c5b1;
+  font-size: 11px;
+}
+.metronome-tempo > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  color: #a9b8a6;
+}
+.metronome-tempo input {
+  width: 75px;
+  height: 33px;
+  border-color: #53664c;
+  background: #242f23;
+  color: #eaf2e5;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 13px;
+  text-align: center;
+}
+.metronome-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: 115px;
+  padding: 9px 12px;
+  border: 1px solid #5a704d;
+  border-radius: 7px;
+  background: #2b3929;
+  color: #dcecd3;
+  font-size: 12px;
+}
+.metronome-toggle[aria-pressed='true'] {
+  border-color: #9fd373;
+  color: #cdfba7;
+}
+.metronome-toggle[aria-pressed='true'] .toggle-light {
+  background: #6f973f;
+}
+.metronome-toggle[aria-pressed='true'] .toggle-light::after {
+  transform: translateX(12px);
+  background: #c8ff94;
+}
+.metronome-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (max-width: 650px) {
+  .metronome-panel {
+    flex-wrap: wrap;
+    gap: 13px;
+  }
+  .metronome-heading {
+    width: 100%;
+  }
+  .metronome-toggle {
+    margin-left: auto;
+  }
+}
 .sound-icon {
   width: 55px;
   height: 62px;
