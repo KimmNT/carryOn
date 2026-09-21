@@ -2162,18 +2162,45 @@ export default function Home() {
                 max={mixLength}
                 step={0.01}
                 value={[
-                  mode === 'playing' && playbackRange.current.all
+                  mode === 'playing' &&
+                  playbackRange.current.all &&
+                  !scrubbingSession
                     ? clock
                     : Math.min(sessionCursor, mixLength),
                 ]}
-                disabled={!hasMix || mode !== 'idle' || exporting}
+                disabled={
+                  !hasMix ||
+                  mode === 'countin' ||
+                  mode === 'recording' ||
+                  exporting
+                }
                 onValueChange={(value) => {
-                  if (Array.isArray(value)) setSessionCursor(value[0]);
+                  if (Array.isArray(value)) {
+                    setScrubbingSession(true);
+                    setSessionCursor(value[0]);
+                  }
+                }}
+                onValueCommitted={(value) => {
+                  if (!Array.isArray(value)) return;
+                  setScrubbingSession(false);
+                  setSessionCursor(value[0]);
+                  if (
+                    modeRef.current === 'playing' &&
+                    playbackRange.current.all
+                  )
+                    void replay(
+                      playbackRange.current.loop,
+                      true,
+                      undefined,
+                      value[0],
+                    );
                 }}
               />
               <span>
                 {fmt(
-                  mode === 'playing' && playbackRange.current.all
+                  mode === 'playing' &&
+                    playbackRange.current.all &&
+                    !scrubbingSession
                     ? clock
                     : Math.min(sessionCursor, mixLength),
                 )}{' '}
