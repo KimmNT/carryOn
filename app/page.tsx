@@ -553,7 +553,7 @@ export default function Home() {
     const s = ctx.createBufferSource();
     s.buffer = buffer;
     s.loop = loop;
-    s.loopStart = 0;
+    s.loopStart = loop ? offset : 0;
     s.loopEnd = buffer.duration;
     s.connect(ctx.destination);
     sources.current.add(s);
@@ -1128,11 +1128,16 @@ export default function Home() {
       const t = Math.max(0, ctx.currentTime - start.current);
       const position =
         mode === 'playing'
-          ? playbackPosition(
-              t + playbackRange.current.startOffset,
-              playbackRange.current.duration,
-              playbackRange.current.loop,
-            )
+          ? playbackRange.current.loop && playbackRange.current.startOffset > 0
+            ? playbackRange.current.startOffset +
+              (t %
+                (playbackRange.current.duration -
+                  playbackRange.current.startOffset))
+            : playbackPosition(
+                t + playbackRange.current.startOffset,
+                playbackRange.current.duration,
+                playbackRange.current.loop,
+              )
           : t;
       setClock(position);
       if (mode === 'recording' && t >= 180) {
@@ -2088,19 +2093,55 @@ export default function Home() {
                   sec
                 </span>
               </label>
+              <label className="session-start-time">
+                Start playback at
+                <span>
+                  <Input
+                    aria-label="Session playback start time in seconds"
+                    type="number"
+                    min={0}
+                    max={mixLength}
+                    step={0.1}
+                    value={Math.min(sessionCursor, mixLength)}
+                    disabled={!hasMix || mode !== 'idle' || exporting}
+                    onChange={(event) => {
+                      const value = Number(event.target.value);
+                      if (Number.isFinite(value))
+                        setSessionCursor(
+                          Math.max(0, Math.min(value, mixLength)),
+                        );
+                    }}
+                  />
+                  sec
+                </span>
+              </label>
               <div className="session-transport">
                 <button
                   className="session-play"
                   disabled={!hasMix || mode !== 'idle' || exporting}
-                  onClick={() => replay(false, true)}
+                  onClick={() =>
+                    replay(
+                      false,
+                      true,
+                      undefined,
+                      Math.min(sessionCursor, mixLength),
+                    )
+                  }
                 >
-                  <Play size={15} fill="currentColor" /> Play session
+                  <Play size={15} fill="currentColor" /> Play from here
                 </button>
                 <button
                   disabled={!hasMix || mode !== 'idle' || exporting}
-                  onClick={() => replay(true, true)}
+                  onClick={() =>
+                    replay(
+                      true,
+                      true,
+                      undefined,
+                      Math.min(sessionCursor, mixLength),
+                    )
+                  }
                 >
-                  <Repeat2 size={15} /> Loop session
+                  <Repeat2 size={15} /> Loop from here
                 </button>
                 <button disabled={mode === 'idle'} onClick={stop}>
                   <Square size={14} fill="currentColor" /> Stop
@@ -2114,9 +2155,36 @@ export default function Home() {
               </div>
             </div>
 
+            <div className="session-seek">
+              <Slider
+                aria-label="Session playback start position"
+                min={0}
+                max={mixLength}
+                step={0.01}
+                value={[
+                  mode === 'playing' && playbackRange.current.all
+                    ? clock
+                    : Math.min(sessionCursor, mixLength),
+                ]}
+                disabled={!hasMix || mode !== 'idle' || exporting}
+                onValueChange={(value) => {
+                  if (Array.isArray(value)) setSessionCursor(value[0]);
+                }}
+              />
+              <span>
+                {fmt(
+                  mode === 'playing' && playbackRange.current.all
+                    ? clock
+                    : Math.min(sessionCursor, mixLength),
+                )}{' '}
+                / {fmt(mixLength)}
+              </span>
+            </div>
+
             <div className="arrangement-help">
-              Drag a take to place it. Solo hears one or more chosen tracks;
-              Mute silences a track.
+              Drag a take to place it. Set a time above to hear any part of the
+              arrangement. Solo hears one or more chosen tracks; Mute silences a
+              track.
             </div>
 
             <div className="arrangement" aria-label="Session arrangement">
@@ -2295,12 +2363,12 @@ export default function Home() {
                   );
                 })}
 
-                {tracks.length > 0 && mode === 'playing' && (
+                {tracks.length > 0 && (
                   <div
-                    className="session-playhead"
+                    className={`session-playhead ${mode !== 'playing' ? 'is-position' : ''}`}
                     style={
                       {
-                        '--playhead-left': `${(clock / mixLength) * timelineWidth}px`,
+                        '--playhead-left': `${((mode === 'playing' ? clock : Math.min(sessionCursor, mixLength)) / mixLength) * timelineWidth}px`,
                       } as React.CSSProperties
                     }
                     aria-hidden="true"

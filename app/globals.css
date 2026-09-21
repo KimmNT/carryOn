@@ -1481,17 +1481,20 @@ footer > span:first-child {
 .session-toolbar h2 {
   margin: 2px 0 0;
 }
-.session-duration {
+.session-duration,
+.session-start-time {
   color: #aab9bf;
   font-size: 13px;
 }
-.session-duration > span {
+.session-duration > span,
+.session-start-time > span {
   display: flex;
   align-items: center;
   gap: 7px;
   margin-top: 6px;
 }
-.session-duration input {
+.session-duration input,
+.session-start-time input {
   width: 88px;
 }
 .session-transport {
@@ -1522,6 +1525,33 @@ footer > span:first-child {
 .session-panel button:disabled {
   cursor: default;
   opacity: 0.4;
+}
+.session-seek {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 13px 24px;
+  border-bottom: 1px solid #30393d;
+  background: #182023;
+}
+.session-seek [data-slot='slider-track'] {
+  height: 7px;
+  background: #3a464a;
+}
+.session-seek [data-slot='slider-thumb'] {
+  width: 15px;
+  height: 21px;
+  border: 2px solid #182023;
+  border-radius: 5px;
+  background: #b9fa73;
+  box-shadow: 0 0 0 1px #b9fa73;
+}
+.session-seek > span {
+  color: #c3d0d3;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .arrangement-help {
   padding: 11px 24px;
@@ -1753,6 +1783,10 @@ footer > span:first-child {
   background: #ff6b62;
   pointer-events: none;
 }
+.session-playhead.is-position {
+  background: #b9fa73;
+  opacity: 0.8;
+}
 .session-footer {
   display: flex;
   justify-content: space-between;
@@ -1772,6 +1806,7 @@ footer > span:first-child {
     --track-panel-width: 176px;
   }
   .session-toolbar,
+  .session-seek,
   .arrangement-help,
   .session-footer,
   .session-note {
