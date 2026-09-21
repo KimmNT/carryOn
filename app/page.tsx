@@ -268,9 +268,11 @@ export default function Home() {
   const volume = 0.7;
   const [tab, setTab] = useState<'record' | 'session'>('record');
   const [sessionLength, setSessionLength] = useState(10);
+  const [sessionLengthDraft, setSessionLengthDraft] = useState('10');
   const [takeName, setTakeName] = useState('');
   const [storageReady, setStorageReady] = useState(false);
   const [sessionCursor, setSessionCursor] = useState(0);
+  const [sessionStartDraft, setSessionStartDraft] = useState('0');
   const [scrubbingSession, setScrubbingSession] = useState(false);
   const [hearSessionWhileRecording, setHearSessionWhileRecording] =
     useState(true);
@@ -306,6 +308,12 @@ export default function Home() {
   }));
   useEffect(() => {
     setSessionLength((n) => Math.max(n, longestSelected));
+    setSessionLengthDraft((draft) => {
+      const value = Number(draft);
+      return draft.trim() && Number.isFinite(value)
+        ? String(Math.max(value, 10, longestSelected))
+        : draft;
+    });
   }, [longestSelected]);
   const hasMix = currentTracks.some((t) => t.hits.length > 0);
   useEffect(() => {
@@ -426,7 +434,7 @@ export default function Home() {
     persistTracks(next);
   }
   function changeSessionLength(value: number) {
-    if (!Number.isFinite(value)) return;
+    if (!Number.isFinite(value)) return mixLength;
     const nextLength = Math.min(1800, Math.max(10, longestSelected, value));
     setSessionLength(nextLength);
     persistTracks(
@@ -439,6 +447,28 @@ export default function Home() {
         ),
       })),
     );
+    return nextLength;
+  }
+  function commitSessionLength() {
+    const value = Number(sessionLengthDraft);
+    if (!sessionLengthDraft.trim() || !Number.isFinite(value)) return;
+    const next = changeSessionLength(value);
+    setSessionLengthDraft(String(next));
+  }
+  function commitSessionStart() {
+    const value = Number(sessionStartDraft);
+    if (!sessionStartDraft.trim() || !Number.isFinite(value)) return;
+    const next = Math.max(0, Math.min(value, mixLength));
+    setSessionCursor(next);
+    setSessionStartDraft(String(next));
+  }
+  function finishSessionSeek(value: number) {
+    const next = Math.max(0, Math.min(value, mixLength));
+    setScrubbingSession(false);
+    setSessionCursor(next);
+    setSessionStartDraft(String(Math.round(next * 100) / 100));
+    if (modeRef.current === 'playing' && playbackRange.current.all)
+      void replay(playbackRange.current.loop, true, undefined, next);
   }
   function saveTake() {
     if (
@@ -1306,6 +1336,8 @@ export default function Home() {
             onClick={() => {
               stopMetronome();
               setMetronomeOn(false);
+              setSessionLengthDraft(String(mixLength));
+              setSessionStartDraft(String(Math.min(sessionCursor, mixLength)));
               setTab('session');
             }}
           >
@@ -2080,15 +2112,17 @@ export default function Home() {
                 <span>
                   <Input
                     aria-label="Session length in seconds"
-                    type="number"
-                    min={Math.max(10, longestSelected)}
-                    max={1800}
-                    step={1}
-                    value={mixLength}
+                    type="text"
+                    inputMode="decimal"
+                    value={sessionLengthDraft}
                     disabled={mode !== 'idle' || exporting}
                     onChange={(event) =>
-                      changeSessionLength(Number(event.target.value))
+                      setSessionLengthDraft(event.target.value)
                     }
+                    onBlur={commitSessionLength}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur();
+                    }}
                   />
                   sec
                 </span>
@@ -2098,18 +2132,16 @@ export default function Home() {
                 <span>
                   <Input
                     aria-label="Session playback start time in seconds"
-                    type="number"
-                    min={0}
-                    max={mixLength}
-                    step={0.1}
-                    value={Math.min(sessionCursor, mixLength)}
+                    type="text"
+                    inputMode="decimal"
+                    value={sessionStartDraft}
                     disabled={!hasMix || mode !== 'idle' || exporting}
-                    onChange={(event) => {
-                      const value = Number(event.target.value);
-                      if (Number.isFinite(value))
-                        setSessionCursor(
-                          Math.max(0, Math.min(value, mixLength)),
-                        );
+                    onChange={(event) =>
+                      setSessionStartDraft(event.target.value)
+                    }
+                    onBlur={commitSessionStart}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur();
                     }}
                   />
                   sec
@@ -2156,45 +2188,40 @@ export default function Home() {
             </div>
 
             <div className="session-seek">
-              <Slider
+              <input
+                className="session-range"
+                type="range"
                 aria-label="Session playback start position"
                 min={0}
                 max={mixLength}
                 step={0.01}
-                value={[
+                value={
                   mode === 'playing' &&
                   playbackRange.current.all &&
                   !scrubbingSession
                     ? clock
-                    : Math.min(sessionCursor, mixLength),
-                ]}
+                    : Math.min(sessionCursor, mixLength)
+                }
                 disabled={
                   !hasMix ||
                   mode === 'countin' ||
                   mode === 'recording' ||
                   exporting
                 }
-                onValueChange={(value) => {
-                  if (Array.isArray(value)) {
-                    setScrubbingSession(true);
-                    setSessionCursor(value[0]);
-                  }
+                onPointerDown={() => setScrubbingSession(true)}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setSessionCursor(value);
+                  setSessionStartDraft(String(Math.round(value * 100) / 100));
                 }}
-                onValueCommitted={(value) => {
-                  if (!Array.isArray(value)) return;
-                  setScrubbingSession(false);
-                  setSessionCursor(value[0]);
-                  if (
-                    modeRef.current === 'playing' &&
-                    playbackRange.current.all
-                  )
-                    void replay(
-                      playbackRange.current.loop,
-                      true,
-                      undefined,
-                      value[0],
-                    );
-                }}
+                onPointerUp={(event) =>
+                  finishSessionSeek(Number(event.currentTarget.value))
+                }
+                onPointerCancel={() => setScrubbingSession(false)}
+                onKeyDown={() => setScrubbingSession(true)}
+                onKeyUp={(event) =>
+                  finishSessionSeek(Number(event.currentTarget.value))
+                }
               />
               <span>
                 {fmt(
