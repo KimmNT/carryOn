@@ -16,6 +16,7 @@ import {
   Keyboard,
   AudioLines,
   Check,
+  Copy,
   Undo2,
   Trash2,
   Minus,
@@ -368,6 +369,34 @@ export default function Home() {
     if (!track) return;
     if (persistTracks(tracks.filter((_, trackIndex) => trackIndex !== index))) {
       setStatus(`${track.name} removed from Session`);
+    }
+  }
+  function duplicateTrack(index: number) {
+    const track = tracks[index];
+    if (!track) return;
+    const baseName = `${track.name} copy`;
+    let copyName = baseName;
+    let copyNumber = 2;
+    while (tracks.some((item) => item.name === copyName)) {
+      copyName = `${baseName} ${copyNumber}`;
+      copyNumber++;
+    }
+    const next = [
+      ...tracks,
+      {
+        ...structuredClone(track),
+        name: copyName,
+        muted: false,
+        solo: false,
+        undo: [],
+        color:
+          COLORS.find(
+            (color) => !tracks.some((item) => item.color === color),
+          ) ?? COLORS[tracks.length % COLORS.length],
+      },
+    ];
+    if (persistTracks(next)) {
+      setStatus(`${copyName} added to Session`);
     }
   }
   function startTrackDrag(
@@ -1345,97 +1374,99 @@ export default function Home() {
           </button>
         </nav>
         <div hidden={tab !== 'record'}>
-          <section className="soundbar" aria-label="Instrument settings">
-            <div className="sound-icon">
-              <Music2 />
-            </div>
-            <div className="field instrument">
-              <label>Instrument</label>
-              <Choice
-                label="Instrument"
-                value={instrument}
-                onChange={(v) => setInstrument(v as Instrument)}
-                options={[
-                  { value: 'piano', label: 'Piano' },
-                  { value: 'guitar', label: 'Guitar' },
-                  { value: 'organ', label: 'Organ' },
-                ]}
-              />
-              <small>
-                {instrument === 'piano'
-                  ? 'Soft attack · sustained tone'
-                  : instrument === 'guitar'
-                    ? 'Bright strings · gentle strum'
-                    : 'Warm drawbars · sustained tone'}
-                <br />
-                Synthesized approximation
-              </small>
-            </div>
-            <div className="soundbar-play-mode">
-              <span className="play-mode-label">Play mode</span>
-              <fieldset className="play-mode-switch" aria-label="Play mode">
-                <button
-                  aria-pressed={playMode === 'chords'}
-                  disabled={mode !== 'idle' || active.length > 0}
-                  onClick={() => setPlayMode('chords')}
-                >
-                  Chords
-                </button>
-                <button
-                  aria-pressed={playMode === 'notes'}
-                  disabled={mode !== 'idle' || active.length > 0}
-                  onClick={() => setPlayMode('notes')}
-                >
-                  Notes
-                </button>
-              </fieldset>
-              <small className="keyboard-note">
-                <Keyboard size={15} /> Computer keyboard ready
-              </small>
-            </div>
-          </section>
-          <section className="metronome-panel" aria-label="Metronome">
-            <div className="metronome-heading">
-              <span className="metronome-icon">
-                <Timer size={19} />
-              </span>
-              <div>
-                <strong>Metronome</strong>
+          <div className="record-control-dock">
+            <section className="soundbar" aria-label="Instrument settings">
+              <div className="sound-icon">
+                <Music2 />
+              </div>
+              <div className="field instrument">
+                <label>Instrument</label>
+                <Choice
+                  label="Instrument"
+                  value={instrument}
+                  onChange={(v) => setInstrument(v as Instrument)}
+                  options={[
+                    { value: 'piano', label: 'Piano' },
+                    { value: 'guitar', label: 'Guitar' },
+                    { value: 'organ', label: 'Organ' },
+                  ]}
+                />
                 <small>
-                  Four beats per bar · click stays out of your takes
+                  {instrument === 'piano'
+                    ? 'Soft attack · sustained tone'
+                    : instrument === 'guitar'
+                      ? 'Bright strings · gentle strum'
+                      : 'Warm drawbars · sustained tone'}
+                  <br />
+                  Synthesized approximation
                 </small>
               </div>
-            </div>
-            <label className="metronome-tempo">
-              Tempo
-              <span>
-                <Input
-                  aria-label="Metronome tempo in beats per minute"
-                  type="number"
-                  min={40}
-                  max={240}
-                  step={1}
-                  value={tempoInput}
-                  disabled={mode !== 'idle'}
-                  onChange={(event) => changeTempo(event.target.value)}
-                  onBlur={() => setTempoInput(String(tempo))}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') event.currentTarget.blur();
-                  }}
-                />
-                BPM
-              </span>
-            </label>
-            <button
-              className="metronome-toggle"
-              aria-pressed={metronomeOn}
-              disabled={mode === 'countin'}
-              onClick={() => void toggleMetronome()}
-            >
-              <span className="toggle-light" aria-hidden="true" />
-              {metronomeOn ? 'Click on' : 'Start click'}
-            </button>
-          </section>
+              <div className="soundbar-play-mode">
+                <span className="play-mode-label">Play mode</span>
+                <fieldset className="play-mode-switch" aria-label="Play mode">
+                  <button
+                    aria-pressed={playMode === 'chords'}
+                    disabled={mode !== 'idle' || active.length > 0}
+                    onClick={() => setPlayMode('chords')}
+                  >
+                    Chords
+                  </button>
+                  <button
+                    aria-pressed={playMode === 'notes'}
+                    disabled={mode !== 'idle' || active.length > 0}
+                    onClick={() => setPlayMode('notes')}
+                  >
+                    Notes
+                  </button>
+                </fieldset>
+                <small className="keyboard-note">
+                  <Keyboard size={15} /> Computer keyboard ready
+                </small>
+              </div>
+            </section>
+            <section className="metronome-panel" aria-label="Metronome">
+              <div className="metronome-heading">
+                <span className="metronome-icon">
+                  <Timer size={19} />
+                </span>
+                <div>
+                  <strong>Metronome</strong>
+                  <small>
+                    Four beats per bar · click stays out of your takes
+                  </small>
+                </div>
+              </div>
+              <label className="metronome-tempo">
+                Tempo
+                <span>
+                  <Input
+                    aria-label="Metronome tempo in beats per minute"
+                    type="number"
+                    min={40}
+                    max={240}
+                    step={1}
+                    value={tempoInput}
+                    disabled={mode !== 'idle'}
+                    onChange={(event) => changeTempo(event.target.value)}
+                    onBlur={() => setTempoInput(String(tempo))}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur();
+                    }}
+                  />
+                  BPM
+                </span>
+              </label>
+              <button
+                className="metronome-toggle"
+                aria-pressed={metronomeOn}
+                disabled={mode === 'countin'}
+                onClick={() => void toggleMetronome()}
+              >
+                <span className="toggle-light" aria-hidden="true" />
+                {metronomeOn ? 'Click on' : 'Start click'}
+              </button>
+            </section>
+          </div>
           <div className="section-heading">
             <h2>
               {playMode === 'chords' ? (
@@ -2343,6 +2374,15 @@ export default function Home() {
                             }
                           >
                             <Repeat2 size={13} />
+                          </button>
+                          <button
+                            className="track-duplicate"
+                            aria-label={'Duplicate ' + track.name}
+                            title="Duplicate this take"
+                            disabled={disabled}
+                            onClick={() => duplicateTrack(index)}
+                          >
+                            <Copy size={13} />
                           </button>
                           <button
                             className="track-remove"

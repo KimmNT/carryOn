@@ -171,6 +171,46 @@ h1 {
   padding: 20px 25px;
   margin-bottom: 28px;
 }
+.record-control-dock {
+  position: sticky;
+  top: 12px;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: minmax(480px, 1.2fr) minmax(390px, 0.8fr);
+  gap: 10px;
+  margin-bottom: 28px;
+  padding: 8px;
+  border: 1px solid #465148;
+  border-radius: 17px;
+  background: rgb(16 19 17 / 92%);
+  box-shadow: 0 16px 38px rgb(0 0 0 / 34%);
+  backdrop-filter: blur(18px);
+}
+.record-control-dock .soundbar,
+.record-control-dock .metronome-panel {
+  min-width: 0;
+  margin: 0;
+}
+.record-control-dock .soundbar {
+  gap: 16px;
+  padding: 12px 14px;
+}
+.record-control-dock .sound-icon {
+  width: 43px;
+  height: 48px;
+}
+.record-control-dock .instrument {
+  width: min(190px, 35vw);
+  gap: 6px;
+}
+.record-control-dock .field small,
+.record-control-dock .soundbar-play-mode .keyboard-note,
+.record-control-dock .metronome-heading small {
+  display: none;
+}
+.record-control-dock .soundbar-play-mode {
+  gap: 5px;
+}
 .metronome-panel {
   display: flex;
   align-items: center;
@@ -180,6 +220,13 @@ h1 {
   border: 1px solid #3b4a39;
   border-radius: 11px;
   background: #1b241b;
+}
+.record-control-dock .metronome-panel {
+  gap: 13px;
+  padding: 12px 14px;
+}
+.record-control-dock .metronome-heading {
+  margin-right: auto;
 }
 .metronome-heading {
   display: flex;
@@ -273,6 +320,44 @@ h1 {
     width: 100%;
   }
   .metronome-toggle {
+    margin-left: auto;
+  }
+}
+@media (max-width: 1000px) {
+  .record-control-dock {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 650px) {
+  .record-control-dock {
+    top: 8px;
+    padding: 6px;
+  }
+  .record-control-dock .soundbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .record-control-dock .sound-icon {
+    display: none;
+  }
+  .record-control-dock .instrument {
+    width: auto;
+  }
+  .record-control-dock .soundbar-play-mode {
+    width: auto;
+    margin-left: 0;
+  }
+  .record-control-dock .metronome-panel {
+    flex-wrap: nowrap;
+  }
+  .record-control-dock .metronome-heading {
+    width: auto;
+  }
+  .record-control-dock .metronome-heading > div {
+    display: none;
+  }
+  .record-control-dock .metronome-toggle {
+    min-width: 105px;
     margin-left: auto;
   }
 }
@@ -1716,6 +1801,11 @@ footer > span:first-child {
 }
 .track-controls .track-remove {
   margin-left: auto;
+}
+.track-controls .track-duplicate:hover:not(:disabled) {
+  border-color: #72b8d8;
+  background: #203d49;
+  color: #aee4ff;
 }
 .track-controls .track-remove:hover:not(:disabled) {
   border-color: #d46767;
