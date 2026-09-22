@@ -282,7 +282,7 @@ export function createKeyGate() {
 }
 // The live player and WAV renderer use the same deterministic PCM synthesis.
 export const SOUND_VERSION = 3;
-export const CHORD_RELEASE_SECONDS = 0.65;
+export const CHORD_RELEASE_SECONDS = 1;
 export function heldChordPartials(instrument: Instrument): number[] {
   return instrument === 'organ'
     ? [1, 0.22, 0.075, 0.025]
