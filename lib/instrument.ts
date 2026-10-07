@@ -559,6 +559,7 @@ export function replaceRecordedChord(
   );
 }
 export type AudioTrack = {
+  gain?: number;
   offset?: number;
   loop?: boolean;
   hits: Hit[];
@@ -587,6 +588,7 @@ export function mixTracks(
   const layers = tracks
     .filter((t) => t.hits.length && t.trim[1] > t.trim[0])
     .map((t) => ({
+      gain: Number.isFinite(t.gain) ? Math.max(0, t.gain!) : 1,
       loop: t.loop,
       start: Math.round(Math.max(0, t.offset ?? 0) * rate),
       pcm: trimAudio(renderTake(t.hits, t.length, rate), rate, ...t.trim),
@@ -606,7 +608,7 @@ export function mixTracks(
       );
       i++
     )
-      mixed[layer.start + i] += layer.pcm[i % layer.pcm.length];
+      mixed[layer.start + i] += layer.pcm[i % layer.pcm.length] * layer.gain;
   let peak = 1;
   for (const sample of mixed) peak = Math.max(peak, Math.abs(sample));
   if (peak > 1) for (let i = 0; i < mixed.length; i++) mixed[i] /= peak;

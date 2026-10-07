@@ -1,6 +1,8 @@
 'use client';
 import {
   useEffect,
+  useMemo,
+  useCallback,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -63,8 +65,27 @@ import {
   type Instrument,
 } from '@/lib/instrument';
 
-import { mixTracks } from '@/lib/instrument';
+import { PianoCoverImport } from '@/components/piano-cover-import';
+import { SessionSections } from '@/components/session-sections';
+import { PianoLayerEditor } from '@/components/piano-layer-editor';
+import {
+  encodeCoverMidi,
+  validSections,
+  type CoverLayer,
+  type CoverPart,
+  type SongSection,
+} from '@/lib/piano-cover';
+import { renderAudioTracks } from '@/lib/render-audio-tracks';
+import { SessionPianoEvents } from '@/components/session-piano-events';
+import { SessionEventEditor } from '@/components/session-event-editor';
+import {
+  groupPianoEvents,
+  positionPianoEvents,
+  type PianoEvent,
+} from '@/lib/session-events';
 type Track = {
+  part?: CoverPart;
+  gain?: number;
   offset?: number;
   loop?: boolean;
   muted?: boolean;
@@ -265,6 +286,25 @@ export default function Home() {
     [status, setStatus] = useState('Ready when you are'),
     [exporting, setExporting] = useState(false);
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [sections, setSections] = useState<SongSection[]>([]);
+  const [editingLayer, setEditingLayer] = useState<number | null>(null);
+  const [activeEvent, setActiveEvent] = useState<{
+    track: number;
+    event: PianoEvent;
+  } | null>(null);
+  const [eventUndo, setEventUndo] = useState<{
+    track: number;
+    previous: Hit[];
+    current: Hit[];
+  } | null>(null);
+  const [timelineZoom, setTimelineZoom] = useState('notes');
+  const selectPianoEvent = useCallback((track: number, event: PianoEvent) => {
+    setActiveEvent({ track, event });
+    setEditingLayer(null);
+  }, []);
+  const [preparing, setPreparing] = useState(false);
+  const audioPreparation = useRef<AbortController | null>(null);
+  useEffect(() => () => audioPreparation.current?.abort(), []);
   const volume = 0.7;
   const [tab, setTab] = useState<'record' | 'session'>('record');
   const [sessionLength, setSessionLength] = useState(10);
@@ -298,6 +338,28 @@ export default function Home() {
     ...tracks.map((t) => t.trim[1] - t.trim[0]),
   );
   const mixLength = Math.max(sessionLength, longestSelected);
+  const eventTimelines = useMemo(
+    () =>
+      tracks.map((track) =>
+        track.part
+          ? positionPianoEvents(
+              groupPianoEvents(
+                track.hits,
+                track.part === 'accompaniment' ? 0.06 : 0.02,
+              ),
+              track.trim,
+              clampTrackStart(
+                track.offset ?? 0,
+                track.trim[1] - track.trim[0],
+                mixLength,
+              ),
+              mixLength,
+              track.loop,
+            )
+          : null,
+      ),
+    [tracks, mixLength],
+  );
   const currentTracks = selectedTracks.map((track) => ({
     ...track,
     offset: clampTrackStart(
@@ -319,6 +381,17 @@ export default function Home() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem('carryon-takes-v1');
+      const savedSections = JSON.parse(
+        localStorage.getItem('carryon-sections-v1') ?? '[]',
+      );
+      if (
+        Array.isArray(savedSections) &&
+        savedSections.every(
+          (s) => typeof s.id === 'string' && typeof s.name === 'string',
+        ) &&
+        validSections(savedSections, 1800)
+      )
+        setSections(savedSections);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (
@@ -356,6 +429,52 @@ export default function Home() {
       return false;
     }
   }
+  function persistSections(next: SongSection[]) {
+    try {
+      localStorage.setItem('carryon-sections-v1', JSON.stringify(next));
+      setSections(next);
+    } catch {
+      setStatus('Section changes could not be saved in this browser.');
+    }
+  }
+  function importPianoCover(
+    name: string,
+    layers: CoverLayer[],
+    duration: number,
+  ) {
+    const first = tracks.length;
+    const names = {
+      melody: 'Melody',
+      bass: 'Bass',
+      accompaniment: 'Accompaniment',
+    };
+    const next: Track[] = [
+      ...tracks,
+      ...layers.map((layer, i) => ({
+        ...emptyTrack(`${name} · ${names[layer.part]}`, 'piano'),
+        part: layer.part,
+        hits: layer.hits,
+        length: duration,
+        trim: [0, duration] as [number, number],
+        gain: layer.part === 'melody' ? 1 : layer.part === 'bass' ? 0.85 : 0.65,
+        color: COLORS[(first + i) % COLORS.length],
+      })),
+    ];
+    if (!persistTracks(next)) return false;
+    if (modeRef.current !== 'idle') stop();
+    setSessionLength((n) => Math.max(n, duration));
+    setSessionLengthDraft(String(Math.max(mixLength, duration)));
+    if (!sections.length)
+      persistSections([
+        { id: crypto.randomUUID(), name: 'Full song', start: 0, end: duration },
+      ]);
+    setEditingLayer(first);
+    setTab('session');
+    setStatus(
+      'Piano cover ready · estimated layers; edit notes and label song sections',
+    );
+    return true;
+  }
   function setTrackState(index: number, change: Partial<Track>) {
     persistTracks(
       tracks.map((track, trackIndex) =>
@@ -363,10 +482,53 @@ export default function Home() {
       ),
     );
   }
+  function saveEventEdit(next: Hit[]) {
+    if (!activeEvent) return false;
+    const index = activeEvent.track,
+      previous = tracks[index].hits;
+    if (
+      !persistTracks(
+        tracks.map((track, i) =>
+          i === index ? { ...track, hits: next } : track,
+        ),
+      )
+    )
+      return false;
+    setEventUndo({ track: index, previous, current: next });
+    setActiveEvent(null);
+    setStatus('Note / chord block updated');
+    return true;
+  }
+  function undoEventEdit() {
+    if (!eventUndo || tracks[eventUndo.track]?.hits !== eventUndo.current)
+      return;
+    if (
+      persistTracks(
+        tracks.map((track, i) =>
+          i === eventUndo.track
+            ? { ...track, hits: eventUndo.previous }
+            : track,
+        ),
+      )
+    ) {
+      setEventUndo(null);
+      setActiveEvent(null);
+      setStatus('Block edit undone');
+    }
+  }
   function removeTrack(index: number) {
     const track = tracks[index];
     if (!track) return;
     if (persistTracks(tracks.filter((_, trackIndex) => trackIndex !== index))) {
+      setActiveEvent(null);
+      setEventUndo(null);
+      setEditingLayer((current) =>
+        current === index
+          ? null
+          : current !== null && current > index
+            ? current - 1
+            : current,
+      );
       setStatus(`${track.name} removed from Session`);
     }
   }
@@ -375,7 +537,7 @@ export default function Home() {
     index: number,
     duration: number,
   ) {
-    if (modeRef.current !== 'idle' || exporting) return;
+    if (modeRef.current !== 'idle' || exporting || preparing) return;
     const lane = event.currentTarget.parentElement;
     if (!lane) return;
     const maxStart = Math.max(0, mixLength - duration);
@@ -435,7 +597,10 @@ export default function Home() {
   }
   function changeSessionLength(value: number) {
     if (!Number.isFinite(value)) return mixLength;
-    const nextLength = Math.min(1800, Math.max(10, longestSelected, value));
+    const nextLength = Math.min(
+      1800,
+      Math.max(10, longestSelected, ...sections.map((s) => s.end), value),
+    );
     setSessionLength(nextLength);
     persistTracks(
       tracks.map((track) => ({
@@ -829,6 +994,9 @@ export default function Home() {
     void triggerNote(i);
   };
   function stop() {
+    if (preparing) setStatus('Playback preparation cancelled');
+    audioPreparation.current?.abort();
+    setPreparing(false);
     countInToken.current++;
     setCountdown(null);
     if (modeRef.current === 'countin')
@@ -874,7 +1042,7 @@ export default function Home() {
       silence();
       const sessionPcm =
         hearSessionWhileRecording && hasMix
-          ? mixTracks(currentTracks, ctx.sampleRate, mixLength)
+          ? await renderAudioTracks(currentTracks, ctx.sampleRate, mixLength)
           : null;
       const sessionBuffer = sessionPcm
         ? ctx.createBuffer(1, sessionPcm.length, ctx.sampleRate)
@@ -965,17 +1133,33 @@ export default function Home() {
     }
     return trimAudio(cached.pcm, rate, trim[0], trim[1]);
   }
-  async function replay(loop = false, all = false, solo?: Track, seekAt = 0) {
+  async function replay(
+    loop = false,
+    all = false,
+    solo?: Track,
+    seekAt = 0,
+    section?: SongSection,
+  ) {
+    audioPreparation.current?.abort();
+    const controller = new AbortController();
+    audioPreparation.current = controller;
+    setPreparing(true);
+    setStatus('Preparing piano playback…');
     try {
       const ctx = await unlock();
       silence();
-      const pcm = all
-        ? mixTracks(
+      const fullPcm = all
+        ? await renderAudioTracks(
             solo ? [{ ...solo, loop: false, offset: 0 }] : currentTracks,
             ctx.sampleRate,
             solo ? 0 : mixLength,
+            controller.signal,
           )
         : selectionAudio(ctx.sampleRate);
+      if (controller.signal.aborted) return;
+      const pcm = section
+        ? trimAudio(fullPcm, ctx.sampleRate, section.start, section.end)
+        : fullPcm;
       const buffer = ctx.createBuffer(1, pcm.length, ctx.sampleRate);
       buffer.getChannelData(0).set(pcm);
       const startOffset = all
@@ -987,7 +1171,7 @@ export default function Home() {
       // Prepare the selected audio before starting the playback clock.
       start.current = ctx.currentTime + 0.06;
       playbackRange.current = {
-        offset: all ? 0 : trim[0],
+        offset: all ? (section?.start ?? 0) : trim[0],
         duration: buffer.duration,
         startOffset,
         loop,
@@ -996,28 +1180,39 @@ export default function Home() {
       endTime.current = start.current + buffer.duration - startOffset;
       playBuffer(ctx, buffer, start.current, loop, startOffset);
       if (metronomeOn) startMetronome(ctx, start.current - startOffset, tempo);
-      setClock(startOffset);
+      setClock(startOffset + (section?.start ?? 0));
       modeRef.current = 'playing';
       setMode('playing');
       setStatus(
-        all
-          ? loop
-            ? 'Looping all tracks'
-            : startOffset > 0
-              ? `Playing Session from ${fmt(startOffset)}`
-              : 'Playing all tracks'
-          : loop
-            ? 'Looping selected range · press Stop to finish'
-            : isTrimmed
-              ? 'Playing selected range once'
-              : 'Playing your full take once',
+        section
+          ? `${loop ? 'Looping' : 'Playing'} ${section.name}`
+          : solo
+            ? `Playing ${solo.name}`
+            : all
+              ? loop
+                ? 'Looping all tracks'
+                : startOffset > 0
+                  ? `Playing Session from ${fmt(startOffset)}`
+                  : 'Playing all tracks'
+              : loop
+                ? 'Looping selected range · press Stop to finish'
+                : isTrimmed
+                  ? 'Playing selected range once'
+                  : 'Playing your full take once',
       );
-    } catch {
+    } catch (error) {
+      if (controller.signal.aborted) return;
       silence();
       modeRef.current = 'idle';
       setMode('idle');
       setClock(0);
-      setStatus('Playback could not start.');
+      setStatus(
+        error instanceof Error
+          ? `Playback could not start: ${error.message}`
+          : 'Playback could not start.',
+      );
+    } finally {
+      if (audioPreparation.current === controller) setPreparing(false);
     }
   }
   function selectRecordedHit(index: number) {
@@ -1032,7 +1227,13 @@ export default function Home() {
     setReplacement(recordedChord(hits[index]));
   }
   function applyRecordedEdit() {
-    if (modeRef.current !== 'idle' || exporting || editHit === null) return;
+    if (
+      modeRef.current !== 'idle' ||
+      exporting ||
+      preparing ||
+      editHit === null
+    )
+      return;
     const previous = hits[editHit];
     const next = replaceRecordedChord(hits, editHit, replacement);
     if (previous.label === next[editHit].label) return;
@@ -1046,7 +1247,13 @@ export default function Home() {
     );
   }
   function undoRecordedEdit() {
-    if (modeRef.current !== 'idle' || exporting || !undoEdits.length) return;
+    if (
+      modeRef.current !== 'idle' ||
+      exporting ||
+      preparing ||
+      !undoEdits.length
+    )
+      return;
     const last = undoEdits[undoEdits.length - 1];
     const next = hits.map((hit, index) =>
       index === last.index ? last.hit : hit,
@@ -1067,7 +1274,9 @@ export default function Home() {
       await new Promise((r) => setTimeout(r, 30));
       const rate = audio.current?.sampleRate ?? 44100;
       const wav = encodeWav(
-        all ? mixTracks(currentTracks, rate, mixLength) : selectionAudio(rate),
+        all
+          ? await renderAudioTracks(currentTracks, rate, mixLength)
+          : selectionAudio(rate),
         rate,
       );
       const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
@@ -1087,6 +1296,22 @@ export default function Home() {
       setStatus('Could not export this take. Try a shorter recording.');
     } finally {
       setExporting(false);
+    }
+  }
+  function downloadMidi() {
+    try {
+      const bytes = encodeCoverMidi(currentTracks, mixLength);
+      const url = URL.createObjectURL(
+        new Blob([bytes as BlobPart], { type: 'audio/midi' }),
+      );
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'carryon-piano-cover.mid';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      setStatus('Session downloaded as MIDI · editable piano tracks');
+    } catch {
+      setStatus('MIDI export could not finish.');
     }
   }
   useEffect(() => {
@@ -1169,7 +1394,12 @@ export default function Home() {
                 playbackRange.current.loop,
               )
           : t;
-      setClock(position);
+      setClock(
+        position +
+          (mode === 'playing' && playbackRange.current.all
+            ? playbackRange.current.offset
+            : 0),
+      );
       if (mode === 'recording' && t >= 180) {
         stopRef.current();
         setStatus('Three-minute take complete · ready to export');
@@ -1190,7 +1420,10 @@ export default function Home() {
         if (!playbackRange.current.loop && ctx.currentTime >= endTime.current) {
           setMode('idle');
           modeRef.current = 'idle';
-          setClock(playbackRange.current.duration);
+          setClock(
+            playbackRange.current.duration +
+              (playbackRange.current.all ? playbackRange.current.offset : 0),
+          );
           setStatus('Playback complete');
           setActive([]);
         }
@@ -1280,11 +1513,35 @@ export default function Home() {
       : playMode === 'notes'
         ? 'note'
         : 'chord';
-  const timelineWidth = Math.max(960, Math.min(18000, mixLength * 22));
-  const timelineTicks = Array.from({ length: 11 }, (_, index) => {
-    const seconds = (mixLength * index) / 10;
-    return { seconds, left: `${index * 10}%` };
-  });
+  const timelineWidth = Math.max(
+    960,
+    Math.min(
+      60000,
+      mixLength *
+        ({ overview: 12, notes: 96, detail: 180 }[timelineZoom] ?? 96),
+    ),
+  );
+  const pixelsPerSecond = timelineWidth / mixLength;
+  const tickStep =
+    pixelsPerSecond >= 150
+      ? 1
+      : pixelsPerSecond >= 70
+        ? 2
+        : pixelsPerSecond >= 35
+          ? 5
+          : pixelsPerSecond >= 15
+            ? 10
+            : 30;
+  const tickTimes = Array.from(
+    { length: Math.floor(mixLength / tickStep) + 1 },
+    (_, index) => index * tickStep,
+  );
+  if (mixLength - tickTimes[tickTimes.length - 1] > tickStep * 0.4)
+    tickTimes.push(mixLength);
+  const timelineTicks = tickTimes.map((seconds) => ({
+    seconds,
+    left: `${(seconds / mixLength) * 100}%`,
+  }));
   return (
     <main>
       <header className="topbar">
@@ -1325,14 +1582,14 @@ export default function Home() {
         <nav className="workspace-tabs" aria-label="Workspace">
           <button
             aria-pressed={tab === 'record'}
-            disabled={mode !== 'idle' || exporting}
+            disabled={mode !== 'idle' || exporting || preparing}
             onClick={() => setTab('record')}
           >
             Record
           </button>
           <button
             aria-pressed={tab === 'session'}
-            disabled={mode !== 'idle' || exporting}
+            disabled={mode !== 'idle' || exporting || preparing}
             onClick={() => {
               stopMetronome();
               setMetronomeOn(false);
@@ -1734,7 +1991,9 @@ export default function Home() {
               />
               <div className="session-monitor-actions">
                 <button
-                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  disabled={
+                    !hasMix || mode !== 'idle' || exporting || preparing
+                  }
                   onClick={() =>
                     replay(
                       false,
@@ -1833,7 +2092,7 @@ export default function Home() {
                   hits.map((h, i) => (
                     <button
                       key={i}
-                      disabled={mode !== 'idle' || exporting}
+                      disabled={mode !== 'idle' || exporting || preparing}
                       onClick={() => h.chord && selectRecordedHit(i)}
                       aria-label={`${h.chord ? 'Edit recorded chord' : 'Recorded note'} ${i + 1}: ${h.label} at ${h.time.toFixed(3)} seconds`}
                       aria-pressed={editHit === i}
@@ -1892,7 +2151,10 @@ export default function Home() {
                     <button
                       className="undo-edit"
                       disabled={
-                        !undoEdits.length || mode !== 'idle' || exporting
+                        !undoEdits.length ||
+                        mode !== 'idle' ||
+                        exporting ||
+                        preparing
                       }
                       onClick={undoRecordedEdit}
                     >
@@ -1917,7 +2179,7 @@ export default function Home() {
                       if (value === 'none') setEditHit(null);
                       else selectRecordedHit(Number(value));
                     }}
-                    disabled={mode !== 'idle' || exporting}
+                    disabled={mode !== 'idle' || exporting || preparing}
                   />
                   {editHit !== null && hits[editHit] && (
                     <>
@@ -1926,7 +2188,7 @@ export default function Home() {
                           chord={replacement}
                           prefix="Replacement"
                           onChange={setReplacement}
-                          disabled={mode !== 'idle' || exporting}
+                          disabled={mode !== 'idle' || exporting || preparing}
                         />
                         <button
                           className="replace-chord"
@@ -1968,7 +2230,7 @@ export default function Home() {
                   step={0.001}
                   minStepsBetweenValues={1}
                   value={trim}
-                  disabled={mode !== 'idle' || exporting}
+                  disabled={mode !== 'idle' || exporting || preparing}
                   onValueChange={(value) => {
                     if (Array.isArray(value)) {
                       updateTrim(value[0], value[1]);
@@ -1989,7 +2251,7 @@ export default function Home() {
                         min={index === 0 ? 0 : trim[0] + 0.001}
                         max={index === 0 ? trim[1] - 0.001 : length}
                         value={trimDraft[index]}
-                        disabled={mode !== 'idle' || exporting}
+                        disabled={mode !== 'idle' || exporting || preparing}
                         onChange={(event) =>
                           setTrimDraft((draft) =>
                             index === 0
@@ -2006,7 +2268,9 @@ export default function Home() {
                   ))}
                   <button
                     className="reset-trim"
-                    disabled={!isTrimmed || mode !== 'idle' || exporting}
+                    disabled={
+                      !isTrimmed || mode !== 'idle' || exporting || preparing
+                    }
                     onClick={() => {
                       updateTrim(0, length);
                       setClock(0);
@@ -2028,7 +2292,7 @@ export default function Home() {
                 placeholder="Name your take"
                 value={takeName}
                 onChange={(e) => setTakeName(e.target.value)}
-                disabled={mode !== 'idle' || exporting}
+                disabled={mode !== 'idle' || exporting || preparing}
               />
               <button
                 onClick={saveTake}
@@ -2057,19 +2321,23 @@ export default function Home() {
                   <Circle size={15} fill="currentColor" />
                   {hits.length ? 'Re-record take' : 'Record take'}
                 </button>
-                <button disabled={mode === 'idle'} onClick={stop}>
+                <button disabled={mode === 'idle' && !preparing} onClick={stop}>
                   <Square size={15} fill="currentColor" />
                   Stop
                 </button>
                 <button
-                  disabled={!hits.length || mode !== 'idle' || exporting}
+                  disabled={
+                    !hits.length || mode !== 'idle' || exporting || preparing
+                  }
                   onClick={() => replay(false)}
                 >
                   <Play size={15} fill="currentColor" />
                   Replay this track
                 </button>
                 <button
-                  disabled={!hits.length || mode !== 'idle' || exporting}
+                  disabled={
+                    !hits.length || mode !== 'idle' || exporting || preparing
+                  }
                   onClick={() => replay(true)}
                   aria-label="Loop selected range"
                 >
@@ -2079,7 +2347,9 @@ export default function Home() {
               </div>
               <button
                 className="download"
-                disabled={!hits.length || mode !== 'idle' || exporting}
+                disabled={
+                  !hits.length || mode !== 'idle' || exporting || preparing
+                }
                 onClick={() => download()}
               >
                 <Download size={17} />
@@ -2102,6 +2372,12 @@ export default function Home() {
         </div>
         {tab === 'session' && (
           <section className="recorder session-panel" aria-label="Session">
+            <PianoCoverImport
+              disabled={
+                mode !== 'idle' || exporting || preparing || !storageReady
+              }
+              onImport={importPianoCover}
+            />
             <div className="session-toolbar">
               <div>
                 <p className="eyebrow">ARRANGEMENT</p>
@@ -2115,7 +2391,7 @@ export default function Home() {
                     type="text"
                     inputMode="decimal"
                     value={sessionLengthDraft}
-                    disabled={mode !== 'idle' || exporting}
+                    disabled={mode !== 'idle' || exporting || preparing}
                     onChange={(event) =>
                       setSessionLengthDraft(event.target.value)
                     }
@@ -2135,7 +2411,9 @@ export default function Home() {
                     type="text"
                     inputMode="decimal"
                     value={sessionStartDraft}
-                    disabled={!hasMix || mode !== 'idle' || exporting}
+                    disabled={
+                      !hasMix || mode !== 'idle' || exporting || preparing
+                    }
                     onChange={(event) =>
                       setSessionStartDraft(event.target.value)
                     }
@@ -2150,7 +2428,9 @@ export default function Home() {
               <div className="session-transport">
                 <button
                   className="session-play"
-                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  disabled={
+                    !hasMix || mode !== 'idle' || exporting || preparing
+                  }
                   onClick={() =>
                     replay(
                       false,
@@ -2163,7 +2443,9 @@ export default function Home() {
                   <Play size={15} fill="currentColor" /> Play from here
                 </button>
                 <button
-                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  disabled={
+                    !hasMix || mode !== 'idle' || exporting || preparing
+                  }
                   onClick={() =>
                     replay(
                       true,
@@ -2175,14 +2457,24 @@ export default function Home() {
                 >
                   <Repeat2 size={15} /> Loop from here
                 </button>
-                <button disabled={mode === 'idle'} onClick={stop}>
+                <button disabled={mode === 'idle' && !preparing} onClick={stop}>
                   <Square size={14} fill="currentColor" /> Stop
                 </button>
                 <button
-                  disabled={!hasMix || mode !== 'idle' || exporting}
+                  disabled={
+                    !hasMix || mode !== 'idle' || exporting || preparing
+                  }
                   onClick={() => download(true)}
                 >
                   <Download size={15} /> Download mix
+                </button>
+                <button
+                  disabled={
+                    !hasMix || mode !== 'idle' || exporting || preparing
+                  }
+                  onClick={downloadMidi}
+                >
+                  <Download size={15} /> Download MIDI
                 </button>
               </div>
             </div>
@@ -2235,10 +2527,50 @@ export default function Home() {
               </span>
             </div>
 
+            <SessionSections
+              sections={sections}
+              length={mixLength}
+              disabled={mode !== 'idle' || exporting || preparing}
+              canPlay={hasMix}
+              onChange={persistSections}
+              onPlay={(section, loop) =>
+                void replay(loop, true, undefined, 0, section)
+              }
+            />
             <div className="arrangement-help">
-              Drag a take to place it. Set a time above to hear any part of the
-              arrangement. Solo hears one or more chosen tracks; Mute silences a
-              track.
+              Click a note or chord block to edit it. Solo hears chosen layers;
+              Mute silences a layer.
+            </div>
+            <div className="event-timeline-toolbar">
+              <label>
+                Timeline zoom
+                <Choice
+                  label="Timeline zoom"
+                  value={timelineZoom}
+                  options={[
+                    { value: 'overview', label: 'Overview' },
+                    { value: 'notes', label: 'Notes' },
+                    { value: 'detail', label: 'Detail' },
+                  ]}
+                  onChange={setTimelineZoom}
+                />
+              </label>
+              <span>
+                Blocks show detected pitches. Matching note groups show chord
+                names.
+              </span>
+              <button
+                disabled={
+                  !eventUndo ||
+                  mode !== 'idle' ||
+                  exporting ||
+                  preparing ||
+                  tracks[eventUndo.track]?.hits !== eventUndo.current
+                }
+                onClick={undoEventEdit}
+              >
+                <Undo2 size={15} /> Undo block edit
+              </button>
             </div>
 
             <div className="arrangement" aria-label="Session arrangement">
@@ -2280,14 +2612,22 @@ export default function Home() {
                     takeDuration,
                     mixLength,
                   );
-                  const disabled = mode !== 'idle' || exporting;
+                  const disabled = mode !== 'idle' || exporting || preparing;
+                  const events = eventTimelines[index];
+                  const rowStyle = events
+                    ? { height: Math.max(152, events.lanes * 36 + 28) }
+                    : undefined;
                   return (
-                    <div className="arrangement-row" key={index}>
+                    <div
+                      className={`arrangement-row ${track.part ? 'cover-row' : ''}`}
+                      key={index}
+                    >
                       <div
                         className="track-strip"
                         style={
                           {
                             '--track-color': trackColor,
+                            ...rowStyle,
                           } as React.CSSProperties
                         }
                       >
@@ -2296,11 +2636,29 @@ export default function Home() {
                           <span>
                             <strong>{track.name}</strong>
                             <small>
-                              {track.instrument} · {takeDuration.toFixed(1)} s
+                              {track.instrument} ·{' '}
+                              {events
+                                ? `${events.blocks.filter((b) => b.repeat === 0).length} blocks`
+                                : `${takeDuration.toFixed(1)} s`}
                             </small>
                           </span>
                         </div>
                         <div className="track-controls">
+                          {track.part && (
+                            <button
+                              aria-label={'Edit notes in ' + track.name}
+                              aria-pressed={editingLayer === index}
+                              disabled={disabled}
+                              onClick={() => {
+                                setActiveEvent(null);
+                                setEditingLayer(
+                                  editingLayer === index ? null : index,
+                                );
+                              }}
+                            >
+                              Edit
+                            </button>
+                          )}
                           <button
                             aria-label={'Solo ' + track.name}
                             aria-pressed={!!track.solo}
@@ -2354,64 +2712,127 @@ export default function Home() {
                             <Trash2 size={13} />
                           </button>
                         </div>
+                        {track.part && (
+                          <label className="layer-volume">
+                            Volume{' '}
+                            <input
+                              type="range"
+                              min={0}
+                              max={1.5}
+                              step={0.05}
+                              value={track.gain ?? 1}
+                              disabled={disabled}
+                              aria-label={'Volume of ' + track.name}
+                              onChange={(e) =>
+                                setTrackState(index, {
+                                  gain: Number(e.target.value),
+                                })
+                              }
+                            />
+                            <span>{Math.round((track.gain ?? 1) * 100)}%</span>
+                          </label>
+                        )}
+                        {track.part && (
+                          <label className="event-layer-start">
+                            Layer start{' '}
+                            <Input
+                              aria-label={'Start of ' + track.name}
+                              type="number"
+                              min={0}
+                              max={Math.max(0, mixLength - takeDuration)}
+                              step={0.1}
+                              value={Number(startTime.toFixed(3))}
+                              disabled={disabled}
+                              onChange={(e) => {
+                                if (e.target.value.trim())
+                                  setTrackState(index, {
+                                    offset: clampTrackStart(
+                                      Number(e.target.value),
+                                      takeDuration,
+                                      mixLength,
+                                    ),
+                                  });
+                              }}
+                            />{' '}
+                            s
+                          </label>
+                        )}
                       </div>
 
-                      <div className="arrangement-lane">
+                      <div className="arrangement-lane" style={rowStyle}>
                         {timelineTicks.map((tick) => (
                           <i key={tick.seconds} style={{ left: tick.left }} />
                         ))}
-                        <button
-                          className={`arrangement-clip ${
-                            draggingTrack === index ? 'is-dragging' : ''
-                          } ${track.muted ? 'is-muted' : ''}`}
-                          style={
-                            {
-                              left: `${(startTime / mixLength) * 100}%`,
-                              width: `${Math.max(
-                                1.25,
-                                (takeDuration / mixLength) * 100,
-                              )}%`,
-                              '--track-color': trackColor,
-                            } as React.CSSProperties
-                          }
-                          aria-label={`${track.name}, starts at ${startTime.toFixed(
-                            1,
-                          )} seconds. Drag to move.`}
-                          title={`${track.name} · starts ${startTime.toFixed(
-                            1,
-                          )}s · drag to move`}
-                          disabled={disabled}
-                          onPointerDown={(event) =>
-                            startTrackDrag(event, index, takeDuration)
-                          }
-                          onPointerMove={moveTrack}
-                          onPointerUp={finishTrackDrag}
-                          onPointerCancel={finishTrackDrag}
-                          onKeyDown={(event) => {
-                            if (
-                              event.key !== 'ArrowLeft' &&
-                              event.key !== 'ArrowRight'
-                            )
-                              return;
-                            event.preventDefault();
-                            const direction =
-                              event.key === 'ArrowRight' ? 1 : -1;
-                            const step = event.shiftKey ? 1 : 0.1;
-                            setTrackState(index, {
-                              offset: clampTrackStart(
-                                startTime + direction * step,
-                                takeDuration,
-                                mixLength,
-                              ),
-                            });
-                          }}
-                        >
-                          <span>{track.name}</span>
-                          <small>
-                            {startTime.toFixed(1)}s →{' '}
-                            {(startTime + takeDuration).toFixed(1)}s
-                          </small>
-                        </button>
+                        {events ? (
+                          <SessionPianoEvents
+                            blocks={events.blocks}
+                            name={track.name}
+                            track={index}
+                            length={mixLength}
+                            color={trackColor}
+                            muted={track.muted}
+                            disabled={disabled}
+                            selected={
+                              activeEvent?.track === index
+                                ? activeEvent.event.id
+                                : undefined
+                            }
+                            onSelect={selectPianoEvent}
+                          />
+                        ) : (
+                          <button
+                            className={`arrangement-clip ${
+                              draggingTrack === index ? 'is-dragging' : ''
+                            } ${track.muted ? 'is-muted' : ''}`}
+                            style={
+                              {
+                                left: `${(startTime / mixLength) * 100}%`,
+                                width: `${Math.max(
+                                  1.25,
+                                  (takeDuration / mixLength) * 100,
+                                )}%`,
+                                '--track-color': trackColor,
+                              } as React.CSSProperties
+                            }
+                            aria-label={`${track.name}, starts at ${startTime.toFixed(
+                              1,
+                            )} seconds. Drag to move.`}
+                            title={`${track.name} · starts ${startTime.toFixed(
+                              1,
+                            )}s · drag to move`}
+                            disabled={disabled}
+                            onPointerDown={(event) =>
+                              startTrackDrag(event, index, takeDuration)
+                            }
+                            onPointerMove={moveTrack}
+                            onPointerUp={finishTrackDrag}
+                            onPointerCancel={finishTrackDrag}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key !== 'ArrowLeft' &&
+                                event.key !== 'ArrowRight'
+                              )
+                                return;
+                              event.preventDefault();
+                              const direction =
+                                event.key === 'ArrowRight' ? 1 : -1;
+                              const step = event.shiftKey ? 1 : 0.1;
+                              setTrackState(index, {
+                                offset: clampTrackStart(
+                                  startTime + direction * step,
+                                  takeDuration,
+                                  mixLength,
+                                ),
+                              });
+                            }}
+                          >
+                            <span>{track.name}</span>
+                            <small>
+                              {startTime.toFixed(1)}s →{' '}
+                              {(startTime + takeDuration).toFixed(1)}s
+                            </small>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -2431,6 +2852,63 @@ export default function Home() {
               </div>
             </div>
 
+            {activeEvent && tracks[activeEvent.track] && (
+              <SessionEventEditor
+                key={`${activeEvent.track}-${activeEvent.event.id}`}
+                event={activeEvent.event}
+                name={tracks[activeEvent.track].name}
+                hits={tracks[activeEvent.track].hits}
+                length={tracks[activeEvent.track].length}
+                disabled={mode !== 'idle' || exporting || preparing}
+                onSave={saveEventEdit}
+                onClose={() => setActiveEvent(null)}
+                onDelete={() => {
+                  const indices = new Set(activeEvent.event.indices);
+                  saveEventEdit(
+                    tracks[activeEvent.track].hits.filter(
+                      (_, i) => !indices.has(i),
+                    ),
+                  );
+                }}
+                onPreview={(preview, duration) =>
+                  void replay(false, true, {
+                    ...emptyTrack('Block preview', 'piano'),
+                    hits: preview,
+                    length: duration,
+                    trim: [0, duration],
+                  })
+                }
+              />
+            )}
+            {editingLayer !== null && tracks[editingLayer]?.part && (
+              <PianoLayerEditor
+                key={`${editingLayer}-${tracks[editingLayer].name}`}
+                name={tracks[editingLayer].name}
+                hits={tracks[editingLayer].hits}
+                length={tracks[editingLayer].length}
+                offset={tracks[editingLayer].offset ?? 0}
+                trimStart={tracks[editingLayer].trim[0]}
+                sections={sections}
+                disabled={mode !== 'idle' || exporting || preparing}
+                onChange={(next) => {
+                  const saved = persistTracks(
+                    tracks.map((track, i) =>
+                      i === editingLayer ? { ...track, hits: next } : track,
+                    ),
+                  );
+                  if (saved) setEventUndo(null);
+                  return saved;
+                }}
+                onPreview={(hit) =>
+                  void replay(false, true, {
+                    ...emptyTrack('Note preview', 'piano'),
+                    hits: [{ ...hit, time: 0 }],
+                    length: hit.duration,
+                    trim: [0, hit.duration],
+                  })
+                }
+              />
+            )}
             <div className="session-footer">
               <span role="status">
                 {status} · {fmt(clock)}
