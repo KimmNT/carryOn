@@ -2,6 +2,291 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 @custom-variant dark (&:is(.dark *));
+
+.cover-import,
+.song-sections,
+.piano-layer-editor {
+  padding: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.cover-import {
+  background: linear-gradient(115deg, #1d2922, #172024 65%);
+}
+.cover-import-heading,
+.cover-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.cover-import h3,
+.song-sections h3,
+.piano-layer-editor h3 {
+  font-size: 20px;
+  margin: 0;
+}
+.cover-import p:not(.eyebrow),
+.song-sections p,
+.piano-layer-editor p {
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.cover-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--primary);
+  border: 1px solid #456044;
+  border-radius: 20px;
+  padding: 7px 12px;
+  font-size: 13px;
+}
+.cover-import-actions,
+.cover-range,
+.section-edit,
+.note-edit-form,
+.editor-actions,
+.note-pagination {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.cover-import-actions {
+  margin: 20px 0;
+}
+.cover-import-actions input[type='file'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.cover-import button,
+.song-sections button,
+.piano-layer-editor button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border: 1px solid #45534d;
+  border-radius: 6px;
+  background: #26312c;
+  color: var(--foreground);
+  font-size: 14px;
+}
+.cover-import button:hover:not(:disabled),
+.song-sections button:hover:not(:disabled),
+.piano-layer-editor button:hover:not(:disabled) {
+  background: #35443b;
+}
+.cover-import .cover-convert {
+  background: var(--primary);
+  color: #162011;
+  font-weight: 600;
+}
+.cover-file-name {
+  color: #c3ccc6;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.cover-range,
+.section-edit,
+.note-edit-form {
+  align-items: flex-end;
+  margin: 16px 0;
+}
+.cover-range label,
+.section-edit label,
+.note-edit-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 14px;
+  flex: 0 1 150px;
+}
+.section-edit label:first-child {
+  flex-basis: 220px;
+}
+.cover-original {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 14px;
+  margin: 16px 0;
+  flex-wrap: wrap;
+}
+.cover-original audio {
+  max-width: 100%;
+  height: 36px;
+}
+.cover-message,
+.cover-error {
+  font-size: 14px;
+  margin: 12px 0;
+  line-height: 1.5;
+}
+.cover-error,
+.song-sections .cover-error,
+.piano-layer-editor .cover-error {
+  color: #ffb7ad;
+}
+.cover-import small {
+  display: block;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #a5b1a9;
+}
+.cover-import [data-slot='progress'] {
+  margin-top: 18px;
+}
+.section-overview {
+  position: relative;
+  height: 42px;
+  margin: 18px 0;
+  background: #131a18;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.section-overview button {
+  position: absolute;
+  height: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  justify-content: flex-start;
+  border-radius: 0;
+  background: #2a3c32;
+  border-color: #56765b;
+}
+.section-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.section-card {
+  display: flex;
+  border: 1px solid #3d4b44;
+  border-radius: 7px;
+  overflow: hidden;
+}
+.section-card button {
+  border: none;
+  border-radius: 0;
+}
+.section-card button:first-child {
+  display: grid;
+  justify-items: start;
+}
+.section-card span {
+  font-size: 12px;
+  color: #b4c1b8;
+}
+.cover-row .track-strip,
+.cover-row .arrangement-lane {
+  height: 116px;
+}
+.layer-volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #b5c3b9;
+  font-size: 12px;
+}
+.layer-volume input {
+  width: 80px;
+  min-width: 20px;
+  accent-color: var(--track-color);
+}
+.layer-volume span {
+  min-width: 32px;
+  text-align: right;
+}
+.piano-layer-editor {
+  background: #18201d;
+}
+.editor-actions [data-slot='select-trigger'] {
+  width: 165px;
+}
+.piano-roll {
+  background: #111715;
+  border: 1px solid #38473e;
+  border-radius: 7px;
+  overflow: auto;
+  margin: 16px 0;
+}
+.piano-roll svg {
+  display: block;
+  width: 100%;
+  min-width: 650px;
+}
+.piano-roll line {
+  stroke: #2d3b32;
+  stroke-width: 1;
+}
+.piano-roll text {
+  fill: #a0b2a5;
+  font-size: 12px;
+}
+.piano-roll rect {
+  fill: #90c46e;
+  cursor: pointer;
+}
+.piano-roll rect:hover,
+.piano-roll rect.is-selected,
+.piano-roll rect:focus {
+  fill: #e3ffcc;
+  stroke: #e3ffcc;
+  stroke-width: 2;
+  outline: none;
+}
+.note-table-wrap {
+  overflow-x: auto;
+}
+.note-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.note-table th,
+.note-table td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid #344137;
+  white-space: nowrap;
+}
+.note-table th {
+  color: #a9b5ad;
+  font-weight: 500;
+}
+.note-table tr.is-selected {
+  background: #2b3b2d;
+}
+.note-pagination {
+  justify-content: flex-end;
+  margin-top: 14px;
+  font-size: 14px;
+  color: #b3c0b7;
+}
+.note-pagination > span:first-child {
+  margin-right: auto;
+}
+@media (max-width: 640px) {
+  .cover-import,
+  .song-sections,
+  .piano-layer-editor {
+    padding: 18px 14px;
+  }
+  .editor-actions {
+    gap: 8px;
+  }
+  .section-edit label,
+  .note-edit-form label,
+  .cover-range label {
+    flex: 1 1 120px;
+  }
+}
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -1905,6 +2190,199 @@ footer > span:first-child {
 .session-playhead.is-position {
   background: #b9fa73;
   opacity: 0.8;
+}
+
+.event-timeline-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid #34423b;
+  background: #19221e;
+}
+.event-timeline-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.event-timeline-toolbar .choice {
+  width: 135px;
+}
+.event-timeline-toolbar > span {
+  flex: 1;
+  color: #a9b8af;
+  font-size: 13px;
+}
+.event-timeline-toolbar > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.piano-event-lane {
+  position: absolute;
+  inset: 0;
+}
+.session-panel .piano-event-block {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 2px;
+  height: 30px;
+  min-width: 6px;
+  padding: 3px 5px;
+  border: 1px solid color-mix(in srgb, var(--track-color) 65%, #32413c);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--track-color) 23%, #16211b);
+  color: var(--track-color);
+  overflow: hidden;
+  text-align: left;
+}
+.piano-event-block strong {
+  display: block;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.piano-event-block small {
+  font-size: 10px;
+  line-height: 10px;
+  color: #cfdbd2;
+  white-space: nowrap;
+}
+.session-panel .piano-event-block.is-chord {
+  background: color-mix(in srgb, var(--track-color) 38%, #18231c);
+  border-top-width: 3px;
+}
+.session-panel .piano-event-block:hover,
+.session-panel .piano-event-block.is-selected,
+.session-panel .piano-event-block:focus-visible {
+  z-index: 3;
+  outline: 2px solid var(--track-color);
+  outline-offset: 1px;
+  background: color-mix(in srgb, var(--track-color) 40%, #1e2a22);
+}
+.piano-event-lane.is-muted {
+  opacity: 0.4;
+}
+.piano-event-empty {
+  position: absolute;
+  top: 40px;
+  left: 16px;
+  color: #94a49a;
+  font-size: 14px;
+}
+.event-layer-start {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: #b5c3b9;
+}
+.event-layer-start input {
+  width: 72px;
+  height: 24px;
+  padding: 2px 5px;
+  font-size: 12px;
+}
+.session-event-editor {
+  padding: 24px;
+  border-top: 1px solid #576d48;
+  border-bottom: 1px solid #34423b;
+  background: #202a22;
+  scroll-margin-top: 18px;
+}
+.session-event-editor h3 {
+  font-size: 20px;
+  margin: 0;
+}
+.session-event-editor h3 span {
+  font-size: 14px;
+  color: #a9b8af;
+  font-weight: 400;
+}
+.session-event-editor button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border: 1px solid #4b5d4f;
+  border-radius: 6px;
+  background: #2a372d;
+  font-size: 14px;
+}
+.event-edit-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 20px 0;
+}
+.event-edit-fields label {
+  display: grid;
+  gap: 7px;
+  flex: 1 1 120px;
+  font-size: 14px;
+}
+.event-edit-fields .event-pitches {
+  flex: 2 1 240px;
+}
+.event-pitches small {
+  font-size: 12px;
+  color: #afbeb3;
+}
+.event-chord-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 18px 0;
+  font-size: 14px;
+}
+.event-chord-picker [data-slot='select-trigger'] {
+  min-width: 90px;
+}
+.event-chord-picker label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.event-chord-picker input {
+  width: 65px;
+}
+.event-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.session-event-editor .event-save {
+  background: #b9fa73;
+  color: #17230f;
+  border-color: #b9fa73;
+  font-weight: 600;
+}
+.event-hint {
+  color: #aab8ae;
+  font-size: 13px;
+  line-height: 1.6;
+}
+@media (max-width: 640px) {
+  .event-timeline-toolbar,
+  .session-event-editor {
+    padding: 16px 14px;
+  }
+  .event-timeline-toolbar > span {
+    flex-basis: 100%;
+  }
 }
 .session-footer {
   display: flex;
